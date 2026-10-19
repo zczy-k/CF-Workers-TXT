@@ -1,0 +1,19 @@
+# Dart / Flutter 构建产物与缓存（pubspec.lock 要入库，别忽略）
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+
+# CI 临时生成的平台脚手架：不入库，由 flutter create 现生成
+app/android/
+app/windows/
+app/ios/
+app/linux/
+app/macos/
+app/web/
+
+# branding.sh 的默认输出目录（CI 里输出到 RUNNER_TEMP，本地跑过别误提交）
+branding-out/

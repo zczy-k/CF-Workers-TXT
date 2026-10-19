@@ -1,0 +1,9 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # 生成的脚手架与插件里带着不少风格提示，别让它们把 error 淹没
+    unused_import: warning
+  # flutter pub get 每次都想加这两行，先放进来，CI 里就不再出现"自动迁移配置"的提示
+  exclude:
+    - build/**

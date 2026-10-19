@@ -1,0 +1,14 @@
+name: webshell_core
+description: WebShell 万能壳的纯 Dart 核心 —— 站点档案、配置持久化、URL 规则、下载队列（可在 CI 里直接 dart test）
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+# 刻意只有 dart:io / dart:convert / dart:async：
+#   URL 规整、配置读写、下载队列全部是纯逻辑，所以能在 ubuntu runner 上秒级跑完单测，
+#   不需要 Flutter、不需要模拟器、更不需要真机。
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^4.0.0
