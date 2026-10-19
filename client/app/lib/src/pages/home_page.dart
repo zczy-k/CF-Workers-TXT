@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../store.dart';
 import '../util.dart';
 import '../widgets/entry_tile.dart';
 import 'editor_page.dart';

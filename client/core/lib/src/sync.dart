@@ -168,7 +168,9 @@ class SyncEngine {
     await root.create(recursive: true);
 
     final remote = await fetchRemoteManifest();
-    state.manifest = Map.of(remote);
+    state.manifest
+      ..clear()
+      ..addAll(remote);
     report.manifestTruncated = state.manifestTruncated;
 
     final now = DateTime.now();
@@ -278,7 +280,9 @@ class SyncEngine {
     final report = SyncReport();
 
     final remote = await fetchRemoteManifest();
-    state.manifest = Map.of(remote);
+    state.manifest
+      ..clear()
+      ..addAll(remote);
     report.manifestTruncated = state.manifestTruncated;
 
     final localNow = await scanLocal();
@@ -296,26 +300,28 @@ class SyncEngine {
         continue;
       }
 
-      final localChanged = base == null || !localStamp.sameAs(base.stamp);
-      final remoteExists = remoteStamp != null;
-      final remoteChanged = remoteExists && (base == null || !remoteStamp!.sameAs(base.stamp));
+      final baseStamp = base?.stamp;
+      final localChanged = baseStamp == null || !localStamp.sameAs(baseStamp);
+      final remoteChanged =
+          remoteStamp != null && (baseStamp == null || !remoteStamp.sameAs(baseStamp));
 
       if (!localChanged) {
-        // 本地没动：远端也还在就什么都不做；远端没了则按"补传"处理（下面会走 upload）
-        if (remoteExists || base != null) {
-          report.unchanged++;
-          state.local[rel] = localStamp;
-          continue;
-        }
+        // 本地没动：远端还在就什么都不做。
+        // （baseStamp 非空才可能走到这里，所以"远端被删了"这一支不用单独判 base）
+        report.unchanged++;
+        state.local[rel] = localStamp;
+        continue;
       }
 
-      if (localChanged && remoteChanged) {
+      if (remoteChanged) {
+        // remoteChanged 为真就已经蕴含 remoteStamp 非空（见上面的表达式），这里不再重复判空
+        final rs = remoteStamp;
         switch (policy) {
           case ConflictPolicy.preferRemote:
             try {
               await client.download(rel, _localFile(rel).path);
-              await adoptMtime(_localFile(rel), remoteStamp!.mtimeMs);
-              final st = await stampOf(_localFile(rel)) ?? remoteStamp!;
+              await adoptMtime(_localFile(rel), rs.mtimeMs);
+              final st = await stampOf(_localFile(rel)) ?? rs;
               state.local[rel] = st;
               state.baseline[rel] = BaselineEntry(rel, st);
               report.downloaded++;
@@ -347,8 +353,8 @@ class SyncEngine {
             // 本机版本已另存，这一份按远端覆盖
             try {
               await client.download(rel, _localFile(rel).path);
-              await adoptMtime(_localFile(rel), remoteStamp!.mtimeMs);
-              final st = await stampOf(_localFile(rel)) ?? remoteStamp!;
+              await adoptMtime(_localFile(rel), rs.mtimeMs);
+              final st = await stampOf(_localFile(rel)) ?? rs;
               state.local[rel] = st;
               state.baseline[rel] = BaselineEntry(rel, st);
               report.downloaded++;
