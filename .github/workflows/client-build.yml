@@ -115,7 +115,9 @@ jobs:
 
       - name: 静态分析（只把 error 当失败）
         working-directory: client/app
-        run: flutter analyze --no-fatal-warnings
+        # 与 core 的 `dart analyze` 相反：flutter analyze 默认把 **info 也算致命**
+        # （本地 3.47.7 实测：只报 7 条 info 也会退 1），所以这里必须显式带 --no-fatal-infos。
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       # 说明：Flutter 模板的 release 默认用 **debug keystore** 签名，所以不配 Secrets
       # 也能产出一个可侧载安装的 APK。想换成正式签名，就在仓库 Secrets 里放
@@ -169,7 +171,9 @@ jobs:
         run: flutter pub get
 
       - name: 静态分析（只把 error 当失败）
-        run: flutter analyze --no-fatal-warnings
+        # 与 core 的 `dart analyze` 相反：flutter analyze 默认把 **info 也算致命**
+        # （本地 3.47.7 实测：只报 7 条 info 也会退 1），所以这里必须显式带 --no-fatal-infos。
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: 构建 release
         run: flutter build windows --release
