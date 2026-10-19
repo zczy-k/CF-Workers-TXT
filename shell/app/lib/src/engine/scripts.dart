@@ -19,10 +19,17 @@ import 'package:webshell_core/webshell_core.dart';
 ///   * 用户点 `<a download>` / `<a href="…zip">` / 文字写着"下载"的 `<a>`；
 ///   * 站点用 JS 动态造 `<a>` 再 `a.click()`（多数文件保存库都这么干，而且**不一定
 ///     把它插进 DOM**，所以 click 事件不会冒泡到 document —— 必须单独劫持 `a.click`）；
-///   * `window.open(url)` / `location = blob:…`；
-///   * `fetch(url)` 或 `XMLHttpRequest` 拿到一个 `Content-Disposition: attachment`
-///     的响应（服务端生成文件的常见做法，地址往往没有扩展名）；
+///   * `window.open(url)` / `location = blob:…` / 服务端回附件的导航型下载
+///     （地址常没扩展名，靠按钮文字或 `?download` 认）；
 ///   * `<form method=post>` 提交后服务端回附件。
+///
+/// **刻意不接管** `fetch()` / `XMLHttpRequest` 里带 `Content-Disposition: attachment`
+/// 的响应：原生浏览器中 fetch/XHR 拿到的响应永远不会触发下载（哪怕带 attachment），
+/// 而"打包下载"这类功能恰恰是页面自己逐个 fetch 文件、再在前端拼成一个 zip
+/// （本站 worker.js 的 packDownload 就是逐个 fetch，单文件响应头正是 attachment）。
+/// 壳一旦抢走这些响应，一次"打包下载"就会被拆成 N 个独立文件 —— 用户看到的正是
+/// "应该是一个 zip，结果下了好几个文件"。放手之后，页面自己把 zip 拼好，走
+/// `a[download]`（blob:）那条路进来，拿到的才是完整的 zip。
 ///
 /// 每一条都留在这里，是因为站点实现千差万别，漏掉任意一条都会表现为"下载按钮点了
 /// 没反应 / 文件不知道去哪了"。命中后统一走两条通道之一：普通 URL 交给原生
@@ -119,21 +126,6 @@ const String _template = r'''
     if (GUESS_EXTS.length && GUESS_EXTS.indexOf(extOf(u)) >= 0) { return true; }
     if (GUESS_QUERY && u.search.toLowerCase().indexOf('download') >= 0) { return true; }
     return labelSaysDownload(el);
-  }
-
-  // 从 Content-Disposition 里抠文件名（含 RFC 5987 的 filename*=）。
-  function fileNameFromCD(cd) {
-    if (!cd) { return ''; }
-    var m = /filename\*\s*=\s*([^;']*)'[^']*'([^;]+)/i.exec(cd);
-    if (m && m[2]) {
-      try { return decodeURIComponent(m[2].trim()); } catch (e) { return m[2].trim(); }
-    }
-    m = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(cd);
-    if (m) {
-      var v = (m[2] || m[1] || '').trim().replace(/^"|"$/g, '');
-      if (v) { return v; }
-    }
-    return '';
   }
 
   // 每次内存下载给一个唯一 key，避免同一个地址并发下载互相覆盖。
@@ -298,26 +290,10 @@ const String _template = r'''
           init.headers = merged;
         }
       } catch (e) { }
-      var promise = origFetch.call(this, input, init);
-      // 服务端生成的下载常常是这样：fetch('/note1/export') → 响应头带
-      // Content-Disposition: attachment。地址没扩展名，只能靠响应头认。
-      try {
-        promise = promise.then(function (resp) {
-          try {
-            var cd = '';
-            try { cd = resp.headers.get('content-disposition') || ''; } catch (e2) { }
-            if (/attachment/i.test(cd) && resp.clone) {
-              var url = resp.url ||
-                (typeof input === 'string' ? absolute(input) : (input && input.url) || '');
-              resp.clone().blob().then(function (blob) {
-                feedBlob(blob, newKey(url), fileNameFromCD(cd));
-              }).catch(function () { });
-            }
-          } catch (e3) { }
-          return resp;
-        });
-      } catch (e) { }
-      return promise;
+      // 只补站点头，响应原样返回。
+      // 不再接管带 attachment 的响应 —— 原生 fetch 也不会因响应头而下载，
+      // 而"打包下载"（页面自己逐个 fetch 再拼 zip）会被这种接管拆散（见文件头注释）。
+      return origFetch.call(this, input, init);
     };
   }
 
@@ -344,23 +320,8 @@ const String _template = r'''
           }
         }
       } catch (e) { }
-      try {
-        self.addEventListener('load', function () {
-          try {
-            var cd = '';
-            try { cd = self.getResponseHeader('content-disposition') || ''; } catch (e2) { }
-            if (!/attachment/i.test(cd)) { return; }
-            var body = self.response;
-            if (body instanceof Blob) {
-              feedBlob(body, newKey(self.responseURL), fileNameFromCD(cd));
-            } else if (body instanceof ArrayBuffer) {
-              feedBlob(new Blob([body]), newKey(self.responseURL), fileNameFromCD(cd));
-            } else if (typeof body === 'string' && body) {
-              feedBlob(new Blob([body]), newKey(self.responseURL), fileNameFromCD(cd));
-            }
-          } catch (e3) { }
-        });
-      } catch (e) { }
+      // 同 fetch：不接管带 attachment 的 XHR 响应 —— 原生里 XHR 也不触发下载，
+      // 接管它只会把"页面自己逐个拉文件再拼 zip"的内部请求误当成下载。
       return origSend.apply(this, arguments);
     };
   } catch (e) { }
