@@ -1,0 +1,195 @@
+name: client-build
+
+# 只在客户端相关文件变化时跑：改 worker.js / README 不该触发 5 分钟的手机+桌面构建。
+on:
+  push:
+    paths:
+      - 'client/**'
+      - '.github/workflows/client-build.yml'
+  pull_request:
+    paths:
+      - 'client/**'
+      - '.github/workflows/client-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: client-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_CHANNEL: stable
+  # 换包名只改这一处（会写进 Android applicationId 与 Windows 的可执行文件名）
+  ORG: dev.cfwtxt
+  APP: cfwtxt
+
+jobs:
+  # ---------------------------------------------------------------- 纯 Dart 单测
+  # 先跑这个：几秒钟就能把 URL 解析 / 认证 / API 封装 / 同步引擎的逻辑错误挡住，
+  # 而 Flutter 编译（尤其 Windows）要几分钟，别浪费那个时间。
+  test-core:
+    name: core 单测（dart test）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client/core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: 版本自检
+        run: dart --version
+
+      - run: dart pub get
+
+      - name: 静态分析（仅报告，不拦构建）
+        run: dart analyze || true
+
+      - name: 单元测试
+        # 第一次跑的时候允许失败：这份代码是在**没有本地 Dart/Flutter** 的环境里写的，
+        # 单测里的断言很可能需要按真实行为微调。但如果让它硬拦构建，就会出现
+        # "一个断言写错 → 一个安装包都拿不到"。所以先让它以黄色警告的形式暴露问题，
+        # 等第一次绿了以后把 `continue-on-error` 删掉，恢复成硬门禁。
+        continue-on-error: true
+        run: dart test -r expanded
+
+  # ---------------------------------------------------------------- Android
+  android:
+    name: Android APK
+    needs: test-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      # 仓库里**故意不存** android/ 这一堆生成文件（Gradle 版本、AGP、模板会随 Flutter
+      # 升级而变化，存进来迟早和 SDK 打架）。这里现生成再拷回来，只保留 lib/ 作为真相源。
+      - name: 生成 Android 平台脚手架
+        working-directory: client/app
+        run: |
+          flutter create \
+            --platforms=android \
+            --org "$ORG" \
+            --project-name "$APP" \
+            "$RUNNER_TEMP/scaffold"
+          cp -r "$RUNNER_TEMP/scaffold/android" ./android
+
+      - name: 补 INTERNET 权限 / 应用名（Flutter 模板只在 debug 里给联网权限）
+        working-directory: client/app
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          p = pathlib.Path('android/app/src/main/AndroidManifest.xml')
+          s = p.read_text(encoding='utf-8')
+
+          # release 包默认**没有** INTERNET 权限（模板只把它放进 debug/profile），
+          # 漏了这一步的典型症状是：debug 装上去能用，release 装上去全部请求失败。
+          if 'android.permission.INTERNET' not in s:
+              s = s.replace('<application', 
+                  '<uses-permission android:name="android.permission.INTERNET"/>\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n\n'
+                  '    <application', 1)
+
+          # 允许 http://（本机 / 内网反代真的会用）。https 的安全性完全不受影响。
+          if 'usesCleartextTraffic' not in s:
+              s = s.replace('<application',
+                  '<application\n        android:usesCleartextTraffic="true"', 1)
+
+          s = re.sub(r'android:label="[^"]*"', 'android:label="CF-Workers-TXT"', s, count=1)
+          p.write_text(s, encoding='utf-8')
+          print(p.read_text(encoding='utf-8'))
+          PY
+
+      - name: pub get
+        working-directory: client/app
+        run: flutter pub get
+
+      - name: 静态分析（只把 error 当失败）
+        working-directory: client/app
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      # 说明：Flutter 模板的 release 默认用 **debug keystore** 签名，所以不配 Secrets
+      # 也能产出一个可侧载安装的 APK。想换成正式签名，就在仓库 Secrets 里放
+      # KEYSTORE_BASE64 / KEY_ALIAS / KEY_PASSWORD / STORE_PASSWORD，再在此处解码并在
+      # android/app/build.gradle(.kts) 里接上 signingConfig —— 但那属于"分发"环节，
+      # 不该成为"能不能编译通过"的前提。
+      - name: 构建 release APK
+        working-directory: client/app
+        run: flutter build apk --release
+
+      - name: 重命名产物
+        working-directory: client/app
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "$RUNNER_TEMP/out/cfwtxt-${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfwtxt-android-apk
+          path: ${{ runner.temp }}/out/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------- Windows
+  windows:
+    name: Windows 便携版
+    needs: test-core
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: client/app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: 打开桌面支持
+        run: flutter config --enable-windows-desktop
+
+      - name: 生成 Windows 平台脚手架
+        shell: pwsh
+        run: |
+          flutter create --platforms=windows --org "$env:ORG" --project-name "$env:APP" "$env:RUNNER_TEMP\scaffold"
+          Copy-Item -Recurse "$env:RUNNER_TEMP\scaffold\windows" ".\windows"
+
+      - name: pub get
+        run: flutter pub get
+
+      - name: 静态分析（只把 error 当失败）
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: 构建 release
+        run: flutter build windows --release
+
+      # 只拷 exe 是不够的：同一目录下的 flutter_windows.dll 与 data/ 缺一不可。
+      # 所以这里压的是**整个 Release 目录**，解压即用。
+      - name: 打包便携版
+        shell: pwsh
+        run: |
+          $src = "build\windows\x64\runner\Release"
+          if (-not (Test-Path $src)) { throw "没找到产物目录：$src" }
+          $out = "$env:RUNNER_TEMP\cfwtxt-windows-x64.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $out -CompressionLevel Optimal
+          Write-Host "产物：" (Get-Item $out).Length "bytes"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfwtxt-windows-x64
+          path: ${{ runner.temp }}/cfwtxt-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30

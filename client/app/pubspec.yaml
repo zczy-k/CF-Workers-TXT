@@ -1,0 +1,43 @@
+name: cfwtxt
+description: CF-Workers-TXT 客户端 —— Android + Windows，不依赖浏览器
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 业务逻辑全在 core 里（纯 Dart、零依赖、可在 CI 里 dart test）
+  cfwtxt_core:
+    path: ../core
+
+  # 站点档案（站点地址必须运行时可改）
+  shared_preferences: ^2.2.3
+
+  # 本地同步目录、下载落点、草稿
+  path_provider: ^2.1.3
+
+  # 密码与会话 Cookie 走平台安全存储（Android Keystore / Windows DPAPI），
+  # 绝不写进 shared_preferences
+  flutter_secure_storage: ^9.2.2
+
+  # 选文件上传（Android 与 Windows 都支持）
+  file_picker: ^8.1.2
+
+  # 分享链接用系统浏览器打开（HTML 预览也走它，见 ARCHITECTURE.md §1）
+  url_launcher: ^6.3.0
+
+  # Markdown 预览（原生渲染，不用 WebView）
+  flutter_markdown: ^0.7.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,7 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # 这个 App 的 UI 全是异步拉数据，显式类型能显著降低"没编译就跑 CI"时的踩坑概率
+    always_declare_return_types: true
+    prefer_single_quotes: true
