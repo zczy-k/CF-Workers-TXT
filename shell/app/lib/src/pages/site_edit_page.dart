@@ -39,6 +39,7 @@ class _SiteEditPageState extends State<SiteEditPage> {
   final TextEditingController _password = TextEditingController();
 
   late bool _stayInSite = _site.stayInSite;
+  late bool _allowSelfSignedCert = _site.allowSelfSignedCert;
   late bool _basicAuth = _site.hasBasicAuth;
   late int _themeColor = _site.themeColor;
   bool _hasStoredPassword = false;
@@ -204,6 +205,13 @@ class _SiteEditPageState extends State<SiteEditPage> {
             title: const Text('只在本站内导航'),
             subtitle: const Text('打开后，跳到别的域名的链接会交给系统浏览器，不会把用户带跑'),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _allowSelfSignedCert,
+            onChanged: (bool value) => setState(() => _allowSelfSignedCert = value),
+            title: const Text('信任自签证书'),
+            subtitle: const Text('内网 / 自建站点的 HTTPS 证书不受系统信任时打开；只对这一个站点生效'),
+          ),
           const Divider(height: 32),
           TextField(
             controller: TextEditingController(text: _site.id),
@@ -277,6 +285,7 @@ class _SiteEditPageState extends State<SiteEditPage> {
       final String user = _user.text.trim();
       _site.basicUser = user.isEmpty ? null : user;
       _site.stayInSite = _stayInSite;
+      _site.allowSelfSignedCert = _allowSelfSignedCert;
 
       if (_basicAuth && _password.text.isNotEmpty) {
         await widget.state.setBasicPassword(_site.id, _password.text);

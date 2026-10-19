@@ -172,6 +172,29 @@ void main() {
       expect(back.branding.appName, '我的壳');
     });
 
+    test('保持登录开关与站点"信任自签证书"能往返', () {
+      final ShellConfig c = ShellConfig(
+        sites: <SiteProfile>[_site('a', 'https://a.com')],
+        activeSiteId: 'a',
+        saveLogin: false,
+      );
+      c.sites.first.allowSelfSignedCert = true;
+      final ShellConfig back = ShellConfig.fromJson(
+        jsonDecode(jsonEncode(c.toJson())),
+      );
+      expect(back.saveLogin, isFalse);
+      expect(back.sites.first.allowSelfSignedCert, isTrue);
+
+      // 默认值：老配置里没有这两个字段时，回落 true / false，别把老配置读坏。
+      final ShellConfig dflt = ShellConfig.fromJson(<String, dynamic>{
+        'sites': <Object?>[
+          <String, dynamic>{'startUrl': 'https://a.com'},
+        ],
+      });
+      expect(dflt.saveLogin, isTrue);
+      expect(dflt.sites.first.allowSelfSignedCert, isFalse);
+    });
+
     test('坏站点条目被丢掉，好的留下；坏 activeSiteId 回落到第一个', () {
       final ShellConfig back = ShellConfig.fromJson(<String, dynamic>{
         'sites': <Object?>[

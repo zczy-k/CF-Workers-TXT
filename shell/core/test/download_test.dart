@@ -198,6 +198,48 @@ void main() {
     });
   });
 
+  group('续传校验（If-Range）', () {
+    test('续传时带上上次的 ETag；服务端没变就接着下', () async {
+      final FakeTransport t = FakeTransport(
+        files: <String, FakeFile>{_url: FakeFile(_body, etag: 'v1')},
+      );
+      final DownloadManager m = _manager(t);
+      final DownloadTask task = m.enqueue(url: _url, siteId: 's', startPaused: true);
+      task.received = 12;
+      task.savePath = '/dl/f.bin';
+      task.etag = 'v1';
+      t.saved['/dl/f.bin'] = _body.sublist(0, 12);
+
+      m.resume(task.id);
+      await m.waitIdle();
+
+      expect(t.lastIfRange, 'v1');
+      expect(t.saved['/dl/f.bin'], _body);
+      expect(task.status, DownloadStatus.done);
+    });
+
+    test('服务端文件已变（If-Range 不匹配）→ 回全量，从头重下，不拼坏文件', () async {
+      final FakeTransport t = FakeTransport(
+        files: <String, FakeFile>{_url: FakeFile(_body, etag: 'v2')},
+      )..fileChanged = true;
+      final DownloadManager m = _manager(t);
+      final DownloadTask task = m.enqueue(url: _url, siteId: 's', startPaused: true);
+      task.received = 12;
+      task.savePath = '/dl/f.bin';
+      task.etag = 'v1';
+      t.saved['/dl/f.bin'] = _body.sublist(0, 12);
+
+      m.resume(task.id);
+      await m.waitIdle();
+
+      expect(t.lastIfRange, 'v1');
+      expect(t.saved['/dl/f.bin'], _body);
+      expect(task.received, _body.length);
+      expect(task.etag, 'v2');
+      expect(task.status, DownloadStatus.done);
+    });
+  });
+
   group('并发、重试、暂停、取消', () {
     test('并发闸门：同时最多 2 个', () async {
       final Map<String, FakeFile> files = <String, FakeFile>{

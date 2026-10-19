@@ -46,6 +46,11 @@ class ShellState extends ChangeNotifier {
   /// 引擎的真实 UA（向 WebView 问来的）。下载时带上它，站点才不会把我们当爬虫。
   String? engineUserAgent;
 
+  /// 当前浏览页的控制器（由 BrowserPage 挂上 / 摘掉）。清某个站点的
+  /// localStorage / IndexedDB 时要用它在页面里跑一段 JS —— 这几样东西在引擎侧
+  /// 没有"按域删除"的接口。为 null（没开浏览页）时只清 Cookie。
+  InAppWebViewController? activeController;
+
   final Map<String, _BlobSession> _blobs = <String, _BlobSession>{};
   Timer? _configTimer;
   Timer? _downloadsTimer;
@@ -106,6 +111,8 @@ class ShellState extends ChangeNotifier {
     downloads.close();
     saveNow();
     saveDownloadsNow();
+    // 退出即不保留：关了"保持登录"就把痕迹擦掉（浏览页侧还有 incognito 兜底）。
+    if (!config.saveLogin) unawaited(_wipeAllLoginState());
     super.dispose();
   }
 
@@ -196,23 +203,95 @@ class ShellState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 清掉某个站点的登录态（只清这个域名的 Cookie，不影响别的站点）。
+  /// 清掉某个站点的登录态：这个域的 Cookie，**以及**页面自己存的会话数据。
+  ///
+  /// 只清这个域名，别的站点不受影响。localStorage / IndexedDB 在引擎侧没有
+  /// "按域删除"的接口，所以靠一段注入的 JS 在页面里逐个删 —— 不少站点把登录
+  /// 令牌放在 localStorage，只清 Cookie 会出现"Cookie 没了、一刷新又自动登录
+  /// 回去"的假退出。
   Future<void> clearSiteData(SiteProfile site) async {
+    final Uri? u = Uri.tryParse(site.startUrl);
+    if (u == null) return;
     try {
-      final Uri? u = Uri.tryParse(site.startUrl);
-      if (u == null) return;
       await CookieManager.instance()
           .deleteCookies(url: WebUri('${u.scheme}://${u.authority}'));
     } catch (_) {
       // 引擎不支持就算了，别把 UI 卡住
     }
+    await _clearWebStorage(u);
   }
 
-  Future<void> clearAllCookies() async {
+  /// 如果当前浏览页正好是这个来源，就在页面里清掉它的本地存储。
+  Future<void> _clearWebStorage(Uri origin) async {
+    final InAppWebViewController? c = activeController;
+    if (c == null) return;
+    try {
+      final WebUri? current = await c.getUrl();
+      if (current == null || current.host != origin.host) return;
+      await c.evaluateJavascript(source: _clearStorageScript);
+    } catch (_) {
+      // 页面已经销毁 / 引擎不支持，忽略
+    }
+  }
+
+  /// 清空所有站点的登录态（设置里的"清空所有 Cookie"、关闭"保持登录状态"）。
+  Future<void> clearAllCookies() => _wipeAllLoginState();
+
+  /// 把整个 App 的登录痕迹擦干净：Cookie + 全部 Web Storage。
+  ///
+  /// [WebStorageManager.deleteAllData] 覆盖所有来源的 localStorage /
+  /// sessionStorage / IndexedDB / CacheStorage，一步到位。
+  Future<void> _wipeAllLoginState() async {
     try {
       await CookieManager.instance().deleteAllCookies();
     } catch (_) {}
+    try {
+      await WebStorageManager.instance().deleteAllData();
+    } catch (_) {
+      // Windows 等平台可能没实现，忽略；Cookie 已经清了
+    }
+    try {
+      await activeController?.clearAllCache();
+    } catch (_) {
+      // 没有打开的浏览页 / 平台没实现：拿不到 controller 就跳过
+    }
   }
+
+  /// 切换"保持登录"。关掉时**立刻**擦掉已经落地的登录态，否则 Cookie 还留在
+  /// 磁盘上，用户以为关了、重启后却仍是登录状态 —— 开关形同虚设。
+  Future<void> setSaveLogin(bool value) async {
+    if (config.saveLogin == value) return;
+    config.saveLogin = value;
+    saveNow();
+    notifyListeners();
+    if (!value) await _wipeAllLoginState();
+  }
+
+  /// 在页面里清掉当前来源的本地存储（localStorage / sessionStorage /
+  /// IndexedDB / caches）。引擎没有按域清这些的 API，只能走 JS。
+  static const String _clearStorageScript = r'''
+(function () {
+  try { localStorage.clear(); } catch (e) {}
+  try { sessionStorage.clear(); } catch (e) {}
+  try {
+    if (window.caches && caches.keys) {
+      caches.keys().then(function (ks) {
+        ks.forEach(function (k) { try { caches.delete(k); } catch (e) {} });
+      });
+    }
+  } catch (e) {}
+  try {
+    if (window.indexedDB && indexedDB.databases) {
+      indexedDB.databases().then(function (dbs) {
+        dbs.forEach(function (db) {
+          try { indexedDB.deleteDatabase(db.name); } catch (e) {}
+        });
+      });
+    }
+  } catch (e) {}
+  return true;
+})();
+''';
 
   // ------------------------------------------------------------ Basic Auth
 

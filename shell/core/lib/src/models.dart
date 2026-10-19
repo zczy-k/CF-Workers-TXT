@@ -34,6 +34,7 @@ class SiteProfile {
     this.hasBasicAuth = false,
     this.basicUser,
     this.stayInSite = false,
+    this.allowSelfSignedCert = false,
     this.createdAtMs = 0,
     this.lastOpenedMs = 0,
   }) : headers = Map<String, String>.of(headers ?? const <String, String>{});
@@ -68,6 +69,12 @@ class SiteProfile {
   /// 只允许站内导航；默认关 —— 关了才"像浏览器"。
   bool stayInSite;
 
+  /// 信任这个站点的自签 / 过期证书（内网服务、自建站点常见）。
+  ///
+  /// 默认关：只对这一个站点放行，别的站点照常走系统校验 —— 绝不能做成
+  /// "全局忽略证书错误"，那是把整个 App 的 HTTPS 安全性一次性废掉。
+  bool allowSelfSignedCert;
+
   final int createdAtMs;
   int lastOpenedMs;
 
@@ -93,6 +100,7 @@ class SiteProfile {
         if (hasBasicAuth) 'hasBasicAuth': true,
         if (basicUser != null && basicUser!.isNotEmpty) 'basicUser': basicUser,
         if (stayInSite) 'stayInSite': true,
+        if (allowSelfSignedCert) 'allowSelfSignedCert': true,
         'createdAtMs': createdAtMs,
         'lastOpenedMs': lastOpenedMs,
       };
@@ -135,6 +143,7 @@ class SiteProfile {
       hasBasicAuth: _asBool(raw['hasBasicAuth'], false),
       basicUser: _asString(raw['basicUser']),
       stayInSite: _asBool(raw['stayInSite'], false),
+      allowSelfSignedCert: _asBool(raw['allowSelfSignedCert'], false),
       createdAtMs: _asInt(raw['createdAtMs'], 0),
       lastOpenedMs: _asInt(raw['lastOpenedMs'], 0),
     );
@@ -152,6 +161,7 @@ class SiteProfile {
         hasBasicAuth: hasBasicAuth,
         basicUser: basicUser,
         stayInSite: stayInSite,
+        allowSelfSignedCert: allowSelfSignedCert,
         createdAtMs: createdAtMs,
         lastOpenedMs: lastOpenedMs,
       );

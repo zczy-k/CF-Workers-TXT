@@ -57,6 +57,14 @@ class DownloadTask {
   /// 服务端是否支持 `Range`（决定"继续"时是续传还是从头下）。
   bool resumable = false;
 
+  /// 续传校验器：上次响应的 `ETag` / `Last-Modified`。
+  ///
+  /// 续传（`Range`）不保证两次响应是同一个文件 —— 服务端在两次之间换了内容，
+  /// 拼出来就是坏文件。带上其一作为 `If-Range`：服务端"文件没变"才回 206，
+  /// 变了就回 200 全量，我们从头发写，绝不拼半新半旧的字节。
+  String? etag;
+  String? lastModified;
+
   final int createdAtMs;
 
   double get progress {
@@ -90,6 +98,9 @@ class DownloadTask {
         if (total != null) 'total': total,
         'status': status.name,
         'resumable': resumable,
+        if (etag != null && etag!.isNotEmpty) 'etag': etag,
+        if (lastModified != null && lastModified!.isNotEmpty)
+          'lastModified': lastModified,
         'createdAtMs': createdAtMs,
       };
 
@@ -115,6 +126,9 @@ class DownloadTask {
     task.received = raw['received'] is int ? raw['received'] as int : 0;
     task.total = raw['total'] is int ? raw['total'] as int : null;
     task.resumable = raw['resumable'] == true;
+    task.etag = raw['etag'] is String ? raw['etag'] as String : null;
+    task.lastModified =
+        raw['lastModified'] is String ? raw['lastModified'] as String : null;
     task.status = _statusFromName(raw['status']);
     // 重启后不该停在"正在下载"，半截文件还在，一律变回暂停由用户决定。
     if (task.status == DownloadStatus.running) task.status = DownloadStatus.paused;
@@ -139,6 +153,8 @@ class DownloadResponse {
     this.totalLength,
     this.acceptsRanges = false,
     this.contentType,
+    this.etag,
+    this.lastModified,
   });
 
   final int statusCode;
@@ -155,6 +171,10 @@ class DownloadResponse {
 
   final bool acceptsRanges;
   final String? contentType;
+
+  /// 服务端给的校验器（续传时回带成 `If-Range`）。
+  final String? etag;
+  final String? lastModified;
 }
 
 /// 落点：真机上是本地文件；Android 上也可以是 SAF 文档。
@@ -166,10 +186,14 @@ abstract class DownloadSink {
 /// 传输层接口。
 abstract class DownloadTransport {
   /// [offset] > 0 表示续传，实现方应带上 `Range` 头。
+  ///
+  /// [ifRange] = 上次响应的 `ETag`/`Last-Modified`，实现方带成 `If-Range`；
+  /// 服务端在文件已变时会回 200 全量（我们据此从头写），避免续传出坏文件。
   Future<DownloadResponse> open(
     Uri url, {
     required Map<String, String> headers,
     int offset = 0,
+    String? ifRange,
   });
 
   /// [append] = false 表示从头写（截断已有内容）。
@@ -194,6 +218,7 @@ class FileDownloadTransport implements DownloadTransport {
     Uri url, {
     required Map<String, String> headers,
     int offset = 0,
+    String? ifRange,
   }) async {
     final HttpClientRequest req = await _client.openUrl('GET', url);
     req.followRedirects = true;
@@ -203,6 +228,10 @@ class FileDownloadTransport implements DownloadTransport {
     });
     if (offset > 0) {
       req.headers.set(HttpHeaders.rangeHeader, 'bytes=$offset-');
+      final String validator = (ifRange ?? '').trim();
+      if (validator.isNotEmpty) {
+        req.headers.set(HttpHeaders.ifRangeHeader, validator);
+      }
     }
 
     final HttpClientResponse resp = await req.close();
@@ -229,6 +258,9 @@ class FileDownloadTransport implements DownloadTransport {
                   false) ||
               resp.statusCode == 206,
       contentType: resp.headers.contentType?.mimeType,
+      etag: _nonEmpty(resp.headers.value(HttpHeaders.etagHeader)),
+      lastModified:
+          _nonEmpty(resp.headers.value(HttpHeaders.lastModifiedHeader)),
     );
   }
 
@@ -487,6 +519,8 @@ class DownloadManager {
       Uri.parse(task.url),
       headers: headers,
       offset: offset,
+      // 续传时带上上次的校验器：文件没变服务端才回 206，变了回 200 全量。
+      ifRange: offset > 0 ? (task.etag ?? task.lastModified) : null,
     );
 
     if (resp.statusCode >= 400) {
@@ -508,8 +542,21 @@ class DownloadManager {
         : (task.savePath = await _resolveSavePath(task));
 
     if (offset > 0 && resp.statusCode == 200) {
-      // 服务端不支持续传：目标文件从头写，进度也归零。
+      // 服务端不支持续传（或 If-Range 校验失败、文件已变）：从头写，进度归零。
       task.received = 0;
+    }
+
+    // 记下服务端这次给的校验器，供下次续传做 `If-Range`。
+    // 200 全量响应是"权威版本"：即使这次没带校验器也要把旧的清掉，否则会拿
+    // 过期校验器去续传一个已经变了的文件。
+    if (resp.statusCode == 200) {
+      task.etag = _nonEmpty(resp.etag);
+      task.lastModified = _nonEmpty(resp.lastModified);
+    } else if (resp.statusCode == 206) {
+      final String? newEtag = _nonEmpty(resp.etag);
+      if (newEtag != null) task.etag = newEtag;
+      final String? newLm = _nonEmpty(resp.lastModified);
+      if (newLm != null) task.lastModified = newLm;
     }
 
     final int? remaining = resp.contentLength;
@@ -565,6 +612,13 @@ class DownloadManager {
     }
     cb(task);
   }
+}
+
+/// 去掉空串的响应头值（不少服务端会回 `ETag:` 这种空值）。
+String? _nonEmpty(String? s) {
+  if (s == null) return null;
+  final String v = s.trim();
+  return v.isEmpty ? null : v;
 }
 
 /// `Content-Range: bytes 100-999/1000` → 1000。
