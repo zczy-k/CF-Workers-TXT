@@ -126,14 +126,16 @@ class _BrowserPageState extends State<BrowserPage> {
               initialUserScripts: UnmodifiableListView<UserScript>(
                 <UserScript>[
                   UserScript(
-                    // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）：
-                    // 除了扩展名，还要靠 `?download` 查询串和"链接文字写着下载"兜底，
-                    // 否则 `/note1/download` 这种地址会被引擎自己悄悄下到别处。
-                    // Android 有原生下载事件，只留保守的扩展名规则，不多猜。
+                    // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）；
+                    // Android 的原生 `onDownloadStartRequest` 只在"WebView 发起导航 →
+                    // 服务端回附件"时才触发，页面用 JS（fetch/XHR/动态 a.click/
+                    // window.open）触发的下载它照样漏。所以两端的自动接管规则都开满：
+                    // 扩展名 + `?download` 查询串 + "链接文字写着下载"。
+                    // 漏拦的代价是"文件不知去向"，误拦最多多一次下载，宁可多猜。
                     source: buildBridgeScript(
                       site,
-                      guessQuery: Platform.isWindows,
-                      guessByLabel: Platform.isWindows,
+                      guessQuery: true,
+                      guessByLabel: true,
                     ),
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                     forMainFrameOnly: false,
