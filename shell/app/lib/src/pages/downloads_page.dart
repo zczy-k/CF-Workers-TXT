@@ -45,7 +45,10 @@ class DownloadsPage extends StatelessWidget {
                     child: Text(
                       '还没有下载。\n\n在站点里点下载链接就行；\n'
                       '前端生成的文件（blob）和长按链接也能下载。\n\n'
-                      '文件会保存到：\n$dir',
+                      '文件会保存到：\n$dir'
+                      // Windows 上引擎拿不到下载事件，总有一小部分下载会由引擎自己
+                      // 完成（直接落到系统「下载」文件夹）。先说清楚，省得用户以为没下成。
+                      '${Platform.isWindows ? '\n\n（少数下载会由引擎自己完成，落到系统的「下载」文件夹，不会出现在这个列表里）' : ''}',
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -74,12 +77,15 @@ class DownloadsPage extends StatelessWidget {
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ),
-                        IconButton(
-                          tooltip: '打开文件夹',
-                          iconSize: 18,
-                          onPressed: () => openDirectory(dir),
-                          icon: const Icon(Icons.folder_open),
-                        ),
+                        // Android 没有"打开文件夹"这种 intent（那是桌面端的事），
+                        // 那边要靠每条记录里的「另存为」把文件放进用户看得见的位置。
+                        if (!Platform.isAndroid)
+                          IconButton(
+                            tooltip: '打开文件夹',
+                            iconSize: 18,
+                            onPressed: () => openDirectory(dir),
+                            icon: const Icon(Icons.folder_open),
+                          ),
                         IconButton(
                           tooltip: '复制路径',
                           iconSize: 18,

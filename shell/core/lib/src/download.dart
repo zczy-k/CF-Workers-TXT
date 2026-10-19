@@ -650,6 +650,25 @@ String joinPath(String dir, String name) {
   return '$dir$sep$name';
 }
 
+/// Android：`/…/Android/data/<包名>/files` → `/…/Android/media/<包名>`。
+///
+/// 为什么要换：`Android/data/<包名>` 从 Android 11 起被系统对文件管理器和 MTP
+/// **屏蔽**了 —— 文件其实下到了手机上，但用户在文件管理里根本翻不到，体验上就是
+/// "下载的东西没到本机"。`Android/media/<包名>` 同样是应用私有目录（不需要任何
+/// 权限，也不用 SAF），但它是**可见**的：WhatsApp 的媒体就放这儿，文件管理器能翻到。
+///
+/// 传入路径不是 Android 应用私有目录的形状时返回 null（调用方自己兜底）。
+String? androidMediaDirOf(String appPrivatePath) {
+  const String marker = '/Android/data/';
+  final int at = appPrivatePath.indexOf(marker);
+  if (at < 0) return null;
+  final String rest = appPrivatePath.substring(at + marker.length);
+  final int slash = rest.indexOf('/');
+  final String pkg = slash < 0 ? rest : rest.substring(0, slash);
+  if (pkg.isEmpty || pkg.contains('..')) return null;
+  return '${appPrivatePath.substring(0, at)}/Android/media/$pkg';
+}
+
 /// 已有同名文件时补 ` (1)`、` (2)`。
 String uniquePath(String path, {bool Function(String path)? exists}) {
   final bool Function(String p) test = exists ?? (String p) => File(p).existsSync();

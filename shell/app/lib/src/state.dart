@@ -59,6 +59,22 @@ class ShellState extends ChangeNotifier {
     if (config.downloadDir == null || config.downloadDir!.isEmpty) {
       config.downloadDir = await defaultDownloadDirectory();
       configFile.save(config);
+    } else if (Platform.isAndroid) {
+      // 升级迁移：老版本的 Android 落点是 Android/data/<包名>/files/Download，
+      // Android 11+ 文件管理器看不到它（用户以为"文件没下到手机上"）。
+      // 只要配的是应用私有目录，就悄悄换成可见的 Android/media/<包名>/Download。
+      final String old = config.downloadDir!;
+      final String? media = androidMediaDirOf(old);
+      if (media != null && old.contains('/Android/data/')) {
+        config.downloadDir = joinPath(media, 'Download');
+        try {
+          Directory(config.downloadDir!).createSync(recursive: true);
+          configFile.save(config);
+        } catch (_) {
+          // 建不出来就保持原样，写文件时会给出更清楚的错误
+          config.downloadDir = old;
+        }
+      }
     }
 
     late final ShellState state;

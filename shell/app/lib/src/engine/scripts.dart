@@ -13,23 +13,26 @@ import 'package:webshell_core/webshell_core.dart';
 ///   4. 长按链接 → 原生菜单（下载 / 复制 / 用系统浏览器打开）；
 ///   5. Windows 上 WebView2 不给全屏事件，这里用 JS 兜底。
 ///
-/// [guessDownloadsByExtension]：链接扩展名像文件（`.zip`/`.pdf`/…）时就当下载
-/// 接管。Android 不开这个 —— 那边原生 `onDownloadStartRequest` 会准确告诉你
-/// "服务器回的是附件"，而按扩展名猜会把"点开看图/看视频"也变成下载。
+/// [guessExtensions] / [guessQuery] / [guessByLabel]：**自动**接管下载的三条宽松规则。
+///
+/// Android 上引擎的 `onDownloadStartRequest` 会准确告诉你"服务器回的是附件"，所以
+/// 自动规则只留保守的 `kBinaryExtensions`（WebView 本来就显示不了的类型）。
+/// Windows 上引擎**完全不告诉**我们下载事件（ARCHITECTURE §7），只能靠脚本多认几种：
+/// 扩展名、`?download` 查询串、以及"链接文字写着下载/保存/导出"。
 String buildBridgeScript(
   SiteProfile site, {
-  bool guessDownloadsByExtension = false,
+  Set<String> guessExtensions = kBinaryExtensions,
+  bool guessQuery = false,
+  bool guessByLabel = false,
 }) {
   return _template
       .replaceFirst('__WS_HEADERS__', jsonEncode(site.headers))
       .replaceFirst(
         '__WS_EXTENSIONS__',
-        jsonEncode(kDownloadExtensions.toList()..sort()),
+        jsonEncode(guessExtensions.toList()..sort()),
       )
-      .replaceFirst(
-        '__WS_GUESS_DOWNLOADS__',
-        guessDownloadsByExtension ? 'true' : 'false',
-      );
+      .replaceFirst('__WS_GUESS_QUERY__', guessQuery ? 'true' : 'false')
+      .replaceFirst('__WS_GUESS_LABEL__', guessByLabel ? 'true' : 'false');
 }
 
 const String _template = r'''
@@ -38,8 +41,9 @@ const String _template = r'''
   window.__wsInstalled = true;
 
   var EXTRA_HEADERS = __WS_HEADERS__;
-  var GUESS_DOWNLOADS = __WS_GUESS_DOWNLOADS__;
-  var DOWNLOAD_EXTS = __WS_EXTENSIONS__;
+  var GUESS_EXTS = __WS_EXTENSIONS__;
+  var GUESS_QUERY = __WS_GUESS_QUERY__;
+  var GUESS_LABEL = __WS_GUESS_LABEL__;
 
   function post(name, payload) {
     try {
@@ -49,24 +53,59 @@ const String _template = r'''
     } catch (e) { }
   }
 
-  function absolute(href) {
-    try { return new URL(href, document.baseURI).href; } catch (e) { return href; }
+  function safeUrl(href) {
+    try { return new URL(href, document.baseURI); } catch (e) { return null; }
   }
 
-  // 这个链接是不是"要点下载"？只认两类，避免把普通链接变成下载：
-  //   * 页面自己标了 download 属性；
-  //   * （Windows 上）地址末段的扩展名像文件。
+  function absolute(href) {
+    var u = safeUrl(href);
+    return u ? u.href : href;
+  }
+
+  // 取扩展名只看末段：/v1.2/download 的末段没有扩展名，不能把父目录里的 .2 算进来
+  function extOf(u) {
+    if (!u) { return ''; }
+    var p = u.pathname.toLowerCase();
+    var slash = p.lastIndexOf('/');
+    var dot = p.lastIndexOf('.');
+    if (dot < 0 || dot < slash + 1) { return ''; }
+    return p.substring(dot + 1);
+  }
+
+  // 链接文字/类名/aria-label 写着"下载/保存/导出"？
+  //
+  // 只在 Windows 上开：那边引擎不给下载事件，而很多站点的下载地址长这样：
+  // `/note1/download`、`/export?id=3` —— 没有扩展名也没有 ?download，
+  // 光看 URL 是猜不出来的，但按钮上一定写着"下载"。
+  function labelSaysDownload(el) {
+    if (!GUESS_LABEL || !el) { return false; }
+    try {
+      var cls = (typeof el.className === 'string') ? el.className : '';
+      var t = ((el.innerText || el.textContent || '') + ' ' +
+               (el.getAttribute('aria-label') || '') + ' ' +
+               (el.getAttribute('title') || '') + ' ' + cls).toLowerCase();
+      if (!t) { return false; }
+      return t.indexOf('下载') >= 0 || t.indexOf('下載') >= 0 ||
+             t.indexOf('保存') >= 0 || t.indexOf('导出') >= 0 ||
+             t.indexOf('匯出') >= 0 || t.indexOf('download') >= 0 ||
+             t.indexOf('export') >= 0 || t.indexOf('save file') >= 0;
+    } catch (e) { return false; }
+  }
+
+  // 这个链接/地址是不是"点了就是要下载"？
+  //   * 页面自己标了 download 属性 —— 最可靠的信号，两端都认；
+  //   * 扩展名在保守表里（zip/pdf/apk/docx…，不含图片/音视频/纯文本）；
+  //   * （Windows）查询串带 download；
+  //   * （Windows）链接文字写着下载。
   function wantsDownload(el, href) {
     if (!href) { return false; }
-    if (el.hasAttribute('download')) { return true; }
-    if (!GUESS_DOWNLOADS) { return false; }
-    var u;
-    try { u = new URL(href, document.baseURI); } catch (e) { return false; }
+    if (el && el.hasAttribute && el.hasAttribute('download')) { return true; }
+    var u = safeUrl(href);
+    if (!u) { return false; }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') { return false; }
-    var path = u.pathname.toLowerCase();
-    var dot = path.lastIndexOf('.');
-    if (dot < 0) { return u.search.toLowerCase().indexOf('download') >= 0; }
-    return DOWNLOAD_EXTS.indexOf(path.substring(dot + 1)) >= 0;
+    if (GUESS_EXTS.length && GUESS_EXTS.indexOf(extOf(u)) >= 0) { return true; }
+    if (GUESS_QUERY && u.search.toLowerCase().indexOf('download') >= 0) { return true; }
+    return labelSaysDownload(el);
   }
 
   // ---- 1) 给页面自己的 fetch / XHR 补上站点自定义请求头 ---------------------
@@ -188,7 +227,7 @@ const String _template = r'''
       sendBlob(u, 'download');
       return null;
     }
-    if (typeof u === 'string' && GUESS_DOWNLOADS && wantsDownload({ hasAttribute: function () { return false; } }, u)) {
+    if (typeof u === 'string' && wantsDownload(null, u)) {
       post('downloadRequest', { url: absolute(u), name: '' });
       return null;
     }

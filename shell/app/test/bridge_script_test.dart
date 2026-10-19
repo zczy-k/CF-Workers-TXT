@@ -13,20 +13,29 @@ import 'package:webshell_core/webshell_core.dart';
 /// 想看**真实行为**（不只是文本），本机可以拿 Edge 无头模式跑真引擎：
 ///
 /// ```powershell
-/// # 1) 先把脚本导出来（临时文件，不进仓库）
-/// #    在 app/test/ 下临时放一个 test，把 buildBridgeScript(...) 写到
-/// #    $env:TEMP/opencode/bridgejs/{guess,noguess}.js
+/// # 1) 先把脚本导出来（临时文件，不进仓库）：在 app/test/ 下临时放一个 test，把
+/// #    buildBridgeScript(site, guessQuery: true, guessByLabel: true)  写到
+/// #    $env:TEMP/opencode/bridgejs/windows.js
+/// #    buildBridgeScript(site)                                       写到
+/// #    $env:TEMP/opencode/bridgejs/android.js
 /// # 2) 拼一个桩页面：定义 window.flutter_inappwebview.callHandler 把每次 post 记进数组，
-/// #    再插入上面导出的脚本，然后 dispatchEvent 点一堆 <a>：
-/// #      a[download] / .pdf / .ZIP / ?download=1 / download="名字" / blob: / .html / 无扩展名
+/// #    把导出的脚本插进去，然后 dispatchEvent 点 16 种 <a>：
+/// #      a[download] / .zip / .ZIP / .pdf / .jpg / .mp4 / .txt / .csv / ?download=1 /
+/// #      文字是「下载」的 /note1/download / class="download-btn" / 文字是 Save File /
+/// #      download="名字" / blob: / .html / 无扩展名
 /// #    页面最后把数组塞进 <div id="out">，用 --dump-dom 读出来
-/// # 3) 跑两次：--virtual-time-budget 让 setTimeout 有机会执行
+/// # 3) 两种配置各跑一次：--virtual-time-budget 让 setTimeout 有机会执行
 /// msedge --headless=new --disable-gpu --virtual-time-budget=4000 `
-///   --dump-dom "file:///…/harness_guess.html"
+///   --dump-dom "file:///…/harness2_windows.html"
 /// ```
 ///
-/// 期望：`guess`（Windows）接管 8 种里的 5 种 + blob 三连；`noguess`（Android）只接管
-/// `a[download]` 与 blob；`.html` 和普通链接都不动（没有误伤）。
+/// 期望（本机实测过）：
+/// * Windows：`a[download]`、`.zip`/`.ZIP`/`.pdf`、`?download=1`、`/note1/download`（链接
+///   文字「下载」）、`class="download-btn"`、`Save File`、带名字的 `download` 都被接管
+///   （名字也带过来了），blob 走三段分片；共 9 次 downloadRequest + 3 次 blob*。
+/// * Android：只接管 `a[download]`、二进制扩展名、带名字的 `download` 与 blob（原生下载
+///   事件在那边会兜住附件响应，所以 `?download`/链接文字这类宽松规则不开）。
+/// * 两端都**不动**：`.html`、`.jpg`、`.mp4`、`.txt`、`.csv` 与普通链接（没有误伤）。
 SiteProfile _site({Map<String, String>? headers}) => SiteProfile(
       id: 's1',
       name: '测试站点',
@@ -52,26 +61,42 @@ void main() {
       expect(js.contains('"X-Space":"1 2"'), isTrue);
     });
 
-    test('按扩展名猜下载：Windows 开、Android 关', () {
-      expect(
-        buildBridgeScript(_site(), guessDownloadsByExtension: true)
-            .contains('var GUESS_DOWNLOADS = true;'),
-        isTrue,
+    test('自动接管规则：扩展名两端都开，?download 与"链接文字"只给 Windows', () {
+      // Android：只有保守的扩展名规则
+      final String android = buildBridgeScript(_site());
+      expect(android.contains('var GUESS_QUERY = false;'), isTrue);
+      expect(android.contains('var GUESS_LABEL = false;'), isTrue);
+
+      // Windows：三条都开（引擎不给下载事件，只能多认几种）
+      final String windows = buildBridgeScript(
+        _site(),
+        guessQuery: true,
+        guessByLabel: true,
       );
-      expect(
-        buildBridgeScript(_site()).contains('var GUESS_DOWNLOADS = false;'),
-        isTrue,
-      );
+      expect(windows.contains('var GUESS_QUERY = true;'), isTrue);
+      expect(windows.contains('var GUESS_LABEL = true;'), isTrue);
+    });
+
+    test('默认扩展名表是保守表：图片/音视频/纯文本不许自动接管', () {
+      final String js = buildBridgeScript(_site());
+      // 该接管的（WebView 显示不了）
+      for (final String ext in <String>['apk', 'pdf', 'zip', 'docx']) {
+        expect(js.contains('"$ext"'), isTrue, reason: '$ext 应该在自动接管表里');
+      }
+      // 不该接管的（用户点它们是想"看"）
+      for (final String ext in <String>['jpg', 'mp4', 'mp3', 'txt', 'md', 'csv', 'html']) {
+        expect(js.contains('"$ext"'), isFalse, reason: '$ext 不该出现在自动接管表里');
+      }
     });
 
     test('下载接管所需的零件都在：扩展名表、a[download] 判断、上报入口', () {
-      final String js = buildBridgeScript(_site(), guessDownloadsByExtension: true);
+      final String js = buildBridgeScript(_site(), guessQuery: true, guessByLabel: true);
       expect(js.contains('downloadRequest'), isTrue, reason: '原生侧的 handler 名字要对上');
       expect(js.contains('hasAttribute(\'download\')'), isTrue);
-      // 扩展名表来自 core 的 kDownloadExtensions，两端口径必须一致
-      expect(js.contains('"apk"'), isTrue);
-      expect(js.contains('"pdf"'), isTrue);
-      expect(js.contains('"torrent"'), isTrue);
+      expect(js.contains('labelSaysDownload'), isTrue);
+      expect(js.contains('wantsDownload'), isTrue);
+      // 走了 window.open 的下载也要接住
+      expect(js.contains('origWindowOpen'), isTrue);
     });
   });
 }

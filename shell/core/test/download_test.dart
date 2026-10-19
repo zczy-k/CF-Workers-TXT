@@ -84,6 +84,20 @@ void main() {
       expect(humanBytes(5 * 1024 * 1024), '5.0 MB');
       expect(humanBytes(150 * 1024 * 1024), '150 MB');
     });
+
+    test('Android 落点：应用私有目录换成"文件管理器看得见"的 Android/media', () {
+      expect(
+        androidMediaDirOf('/storage/emulated/0/Android/data/com.demo.shell/files'),
+        '/storage/emulated/0/Android/media/com.demo.shell',
+      );
+      expect(
+        androidMediaDirOf('/storage/emulated/0/Android/data/com.demo.shell/files/Download'),
+        '/storage/emulated/0/Android/media/com.demo.shell',
+      );
+      // 不认识的形状：不猜，交回 null 让调用方兜底
+      expect(androidMediaDirOf('/data/user/0/com.demo.shell/files'), isNull);
+      expect(androidMediaDirOf(''), isNull);
+    });
   });
 
   group('下载流程', () {
