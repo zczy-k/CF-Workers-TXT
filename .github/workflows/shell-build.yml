@@ -112,7 +112,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 生成图标与白标配置
-        run: bash shell/tools/branding.sh "$RUNNER_TEMP/branding"
+        run: |
+          # 用 pipefail 才能让 tee 之后仍然按脚本的退出码判定成败
+          set -o pipefail
+          bash shell/tools/branding.sh "$RUNNER_TEMP/branding" 2>&1 | tee "$RUNNER_TEMP/branding.log"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -120,6 +123,20 @@ jobs:
           path: ${{ runner.temp }}/branding
           if-no-files-found: error
           retention-days: 7
+
+      - name: 失败原因（免登录可读）
+        if: failure()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=( "$RUNNER_TEMP"/*.log "$(dirname "$RUNNER_TEMP")"/_diag/Worker_*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            printf '::error title=%s::%s\n' 'branding 失败' '没找到日志文件，请登录 GitHub 查看'
+            exit 0
+          fi
+          for f in $(ls -t "${files[@]}" | head -3); do
+            printf '::error title=%s::%s\n' "$(basename "$f") 尾部" "$(tail -c 2500 "$f" | tr '\r\n' '~~')"
+          done
 
   # ---------------------------------------------------------------- Android
   android:
@@ -165,23 +182,32 @@ jobs:
 
       - name: 放入白标图标与预置配置
         run: |
-          cp -r "$RUNNER_TEMP/branding/android-res/." android/app/src/main/res/
-          cp "$RUNNER_TEMP/branding/preset.json" assets/preset.json
-          python3 "$GITHUB_WORKSPACE/shell/tools/patch_platform.py" \
-            manifest android/app/src/main/AndroidManifest.xml "$APP_NAME_EFFECTIVE"
+          set -o pipefail
+          {
+            cp -r "$RUNNER_TEMP/branding/android-res/." android/app/src/main/res/
+            cp "$RUNNER_TEMP/branding/preset.json" assets/preset.json
+            python3 "$GITHUB_WORKSPACE/shell/tools/patch_platform.py" \
+              manifest android/app/src/main/AndroidManifest.xml "$APP_NAME_EFFECTIVE"
+          } 2>&1 | tee "$RUNNER_TEMP/patch-android.log"
 
       - name: pub get
-        run: flutter pub get
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee "$RUNNER_TEMP/android-pub.log"
 
       - name: 静态分析（只把 error 当失败）
         # 与 core 的 `dart analyze` 相反：flutter analyze 默认把 info 也算致命
         # （本地 3.47.7 实测：只报 info 也会退 1），所以这里必须显式带 --no-fatal-infos。
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        run: |
+          set -o pipefail
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee "$RUNNER_TEMP/android-analyze.log"
 
       # Flutter 模板的 release 默认用 debug keystore 签名，所以不配 Secrets 也能出
       # 一个可侧载安装的 APK。要正式签名请在 Secrets 里放 keystore 再改 build.gradle。
       - name: 构建 release APK
-        run: flutter build apk --release
+        run: |
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee "$RUNNER_TEMP/android-build.log"
 
       - name: 重命名产物
         run: |
@@ -195,6 +221,25 @@ jobs:
           path: ${{ runner.temp }}/out/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      # Actions 的原始日志必须登录才能看；注解（annotation）挂在 check run 上，
+      # 公开仓库能免登录读到：
+      #   GET /repos/<owner>/<repo>/commits/<sha>/check-runs
+      #   GET /repos/<owner>/<repo>/check-runs/<id>/annotations
+      # 所以失败时把各步骤日志的尾部转成注解，仓库外的人（和协助排错的 agent）也能诊断。
+      - name: 失败原因（免登录可读）
+        if: failure()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=( "$RUNNER_TEMP"/*.log "$(dirname "$RUNNER_TEMP")"/_diag/Worker_*.log )
+          if [ ${#files[@]} -eq 0 ]; then
+            printf '::error title=%s::%s\n' 'Android 构建失败' '没找到日志文件，请登录 GitHub 查看'
+            exit 0
+          fi
+          for f in $(ls -t "${files[@]}" | head -3); do
+            printf '::error title=%s::%s\n' "$(basename "$f") 尾部" "$(tail -c 2500 "$f" | tr '\r\n' '~~')"
+          done
 
   # ---------------------------------------------------------------- Windows
   windows:
@@ -279,3 +324,25 @@ jobs:
           path: ${{ runner.temp }}/webshell-windows-*.zip
           if-no-files-found: error
           retention-days: 30
+
+      # 同 Android job 里的说明：原始日志要登录才能看，注解免登录可读，
+      # 所以失败时把诊断日志尾部打成注解。
+      # 这里不去 tee 各个步骤：pwsh 7.4+ 把原生命令的 stderr 当错误处理，
+      # 加 2>&1 | Tee-Object 反而可能把正常警告变成失败，不值得。
+      - name: 失败原因（免登录可读）
+        if: failure()
+        shell: pwsh
+        run: |
+          $cands = @()
+          $cands += Get-ChildItem "$env:RUNNER_TEMP\*.log" -ErrorAction SilentlyContinue
+          $cands += Get-ChildItem "$(Split-Path $env:RUNNER_TEMP -Parent)\_diag\Worker_*.log" -ErrorAction SilentlyContinue
+          $files = $cands | Sort-Object LastWriteTime -Descending | Select-Object -First 3
+          if (-not $files) {
+            Write-Host "::error title=Windows 构建失败::没找到日志文件，请登录 GitHub 查看"
+            return
+          }
+          foreach ($f in $files) {
+            $text = (Get-Content -LiteralPath $f.FullName -Tail 30 -ErrorAction SilentlyContinue) -join " ~ "
+            if ($text.Length -gt 2500) { $text = $text.Substring($text.Length - 2500) }
+            Write-Host "::error title=$($f.Name) 尾部::$text"
+          }

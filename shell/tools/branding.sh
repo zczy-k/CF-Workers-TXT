@@ -28,12 +28,36 @@ LOGO_PATH="${LOGO_PATH:-}"
 AUTO_ICON="${AUTO_ICON:-true}"
 ALLOW_ADD_SITE="${ALLOW_ADD_SITE:-true}"
 
-if command -v magick >/dev/null 2>&1; then IM="magick"; else IM="convert"; fi
+if command -v magick >/dev/null 2>&1; then IM="magick"; elif command -v convert >/dev/null 2>&1; then IM="convert"; else
+  say "找不到 ImageMagick（CI 的 ubuntu runner 自带；本地跑请先装 imagemagick），没法生成图标"
+  exit 1
+fi
+
+# 画首字母要字体。runner 上不保证装了字体，所以显式找一个 DejaVu/Liberation，
+# 一个都找不到就退化成几何图形——总之不能让"没有字体"变成构建失败。
+FONT=""
+for f in \
+  /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf \
+  /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+  /usr/share/fonts/TTF/DejaVuSans-Bold.ttf \
+  /usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf ; do
+  if [ -f "$f" ]; then FONT="$f"; break; fi
+done
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUT_DIR"
 
 say() { printf '%s\n' "---- $*"; }
+
+# 主题色只认 #RRGGBB。手填的输入不能直接喂给 shell 算术与 ImageMagick：
+# 一个拼错的颜色会让 `16#FFZZZZZZ` 当场报错退出，看起来像脚本坏了。
+case "$THEME_COLOR" in
+  \#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+  *)
+    say "主题色 '$THEME_COLOR' 不是 #RRGGBB，改用默认 #2962FF"
+    THEME_COLOR="#2962FF"
+    ;;
+esac
 
 # ---------------------------------------------------------------- App 标识
 # Android 包名的最后一段必须是合法标识符（Flutter 拿它当 Dart 包名用），
@@ -58,12 +82,15 @@ SRC=""
 if [ -n "$LOGO_PATH" ] && [ -f "$LOGO_PATH" ]; then
   SRC="$LOGO_PATH"
   say "图标来源：仓库文件 $LOGO_PATH"
-elif [ -n "$LOGO_URL" ]; then
-  if curl -fsSL --max-time 30 "$LOGO_URL" -o "$WORK/logo-src"; then
-    SRC="$WORK/logo-src"
-    say "图标来源：$LOGO_URL"
-  else
-    say "图标 URL 下载失败，继续往下找"
+else
+  [ -z "$LOGO_PATH" ] || say "logo_path 指向的文件不存在：$LOGO_PATH（继续往下找）"
+  if [ -n "$LOGO_URL" ]; then
+    if curl -fsSL --max-time 30 "$LOGO_URL" -o "$WORK/logo-src"; then
+      SRC="$WORK/logo-src"
+      say "图标来源：$LOGO_URL"
+    else
+      say "图标 URL 下载失败，继续往下找"
+    fi
   fi
 fi
 
@@ -106,10 +133,17 @@ if [ ! -s "$OUT_DIR/logo.png" ]; then
   fi
   [ -n "$LETTER" ] || LETTER="W"
   LETTER="$(printf '%s' "$LETTER" | tr '[:lower:]' '[:upper:]')"
-  say "图标来源：首字母 $LETTER"
-  $IM -size 1024x1024 "xc:$THEME_COLOR" -gravity center \
-      -pointsize 560 -fill white -annotate 0 "$LETTER" \
-      "$OUT_DIR/logo.png"
+  say "图标来源：首字母 $LETTER（字体：${FONT:-无，改用几何图形}）"
+  if [ -n "$FONT" ]; then
+    $IM -size 1024x1024 "xc:$THEME_COLOR" -gravity center -font "$FONT" \
+        -pointsize 560 -fill white -annotate 0 "$LETTER" \
+        "$OUT_DIR/logo.png"
+  else
+    # 没有字体也要出图：白色圆环 + 圆心实点，朴素但很清楚
+    $IM -size 1024x1024 "xc:$THEME_COLOR" -fill white \
+        -draw "circle 512,512 512,110" -fill "$THEME_COLOR" \
+        -draw "circle 512,512 512,210" "$OUT_DIR/logo.png"
+  fi
 fi
 
 # ---------------------------------------------------------------- 3) Android
@@ -187,6 +221,8 @@ PRESET_URL_EFFECTIVE=$PRESET_URL
 ENV
 
 say "产物："
-ls -R "$OUT_DIR" | head -40
+# 加 || true：set -o pipefail 下 head 提前关管道会让 ls 收到 SIGPIPE 而"失败"，
+# 脚本会在最后一步无谓地退出码非 0。
+ls -R "$OUT_DIR" | head -40 || true
 say "preset.json:"
 cat "$OUT_DIR/preset.json"
