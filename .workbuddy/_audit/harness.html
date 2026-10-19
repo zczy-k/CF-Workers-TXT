@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>audit-harness</title></head>
+<body>
+<pre id="out" style="white-space:pre-wrap;font:12px/1.5 Consolas,monospace"></pre>
+<script src="mock.js"></script>
+<script src="worker_testable.js"></script>
+<script>
+(async function(){
+  var out = document.getElementById('out');
+  function log(s){ out.textContent += s + '\n'; console.log(s); }
+  var pass = 0, fail = 0;
+  function ok(c, m, x){ if (c){ pass++; log('  ok   ' + m); } else { fail++; log('  FAIL ' + m + (x !== undefined ? '  -> ' + JSON.stringify(x) : '')); } }
+  function head(t){ log('\n== ' + t + ' =='); }
+
+  var ORIGIN = 'https://demo.workers.dev';
+  var ADMIN = '/adm-123';
+  var enc = function(s){ return new TextEncoder().encode(s); };
+
+  try {
+    var w = window.__worker;
+    var M = window.__mock;
+    log('worker loaded: ' + (w && typeof w.fetch === 'function'));
+    log('crypto.subtle: ' + (self.crypto && self.crypto.subtle ? 'yes' : 'NO'));
+
+    async function sha256Hex(t){
+      var b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
+      return Array.prototype.map.call(new Uint8Array(b), function(x){ return x.toString(16).padStart(2,'0'); }).join('');
+    }
+    var PW = 'pw123456';
+    var cookie = 'wbauth=' + await sha256Hex(PW + '::adm-123');
+
+    function mk(env){
+      var R2 = new M.MockR2(), KV = new M.MockKV(), exec = M.makeExec();
+      var e = Object.assign({ R2: R2, KV: KV, ADMIN_UUID: 'adm-123', FILENAME: '测试盘', PASSWORD: PW }, env || {});
+      var call = async function(path, init){
+        // 浏览器禁止设置 Cookie 头（forbidden header），所以用 Proxy 注入登录态，
+        // 让 request.headers.get('Cookie') 能读到 —— worker 只用到 headers.get
+        var base = new Request(ORIGIN + path, init || {});
+        var shim = { get: function(n){ return String(n).toLowerCase() === 'cookie' ? cookie : base.headers.get(n); },
+                     has: function(n){ return this.get(n) !== null; } };
+        var req = new Proxy(base, { get: function(t, prop){
+          if (prop === 'headers') return shim;
+          if (prop === 'clone') return function(){ return req; };
+          var v = t[prop];
+          return typeof v === 'function' ? v.bind(t) : v;
+        } });
+        var res = await w.fetch(req, e, exec);
+        await Promise.all(exec.waits.splice(0));
+        return res;
+      };
+      return { R2: R2, KV: KV, e: e, call: call };
+    }
+    var jpost = function(call, url, obj){ return call(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(obj) }); };
+    var jget = async function(call, url){ return JSON.parse(await (await call(url)).text()); };
+
+    // ============ A. 基础回归 ============
+    head('基础回归');
+    {
+      var c = mk();
+      var r = await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'笔记' });
+      ok((await r.json()).ok, '新建文件夹');
+      r = await c.call(ADMIN + '/api?path=' + encodeURIComponent('笔记/菜鸟.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('你好，菜鸟笔记。') });
+      ok((await r.json()).ok, '写入文本文件');
+      r = await c.call(ADMIN + '/api?action=read&path=' + encodeURIComponent('笔记/菜鸟.txt'));
+      ok((await r.text()) === '你好，菜鸟笔记。', '读回内容一致');
+      var d = await jget(c.call, ADMIN + '/api?action=list');
+      ok(d.folders.indexOf('笔记') >= 0, 'list 能看到文件夹');
+      d = await jget(c.call, ADMIN + '/api?action=treeFull');
+      ok(d.ok && d.tree && Array.isArray(d.protected), 'treeFull 正常 && 带 protected 数组', Object.keys(d));
+    }
+
+    // ============ B. 受保护文件夹：后端 ============
+    head('受保护文件夹：后端校验');
+    var c = mk();
+    var R2 = c.R2;
+    {
+      var r = await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'普通' });
+      ok((await r.json()).ok, '建普通文件夹');
+      r = await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'重要资料', protected:true });
+      var d = await r.json();
+      ok(d.ok && d.protected === true, '建受保护文件夹 protected=true', d);
+      var marker = R2.map.get('d/重要资料/');
+      ok(!!marker && marker.customMetadata.protected === '1', 'R2 占位对象带 protected=1', marker && marker.customMetadata);
+
+      d = await jget(c.call, ADMIN + '/api?action=treeFull');
+      ok(Array.isArray(d.protected) && d.protected.indexOf('重要资料') >= 0, 'treeFull 回报受保护路径', d.protected);
+      ok(d.protected.indexOf('普通') < 0, '普通文件夹不在受保护列表');
+
+      // list 不应再逐个 head（性能）
+      var h0 = R2.ops.head;
+      await c.call(ADMIN + '/api?action=list');
+      ok(R2.ops.head === h0, 'list 不再对每个文件夹发 head（性能）', R2.ops.head - h0);
+
+      // 放文件进受保护文件夹
+      await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料/密码.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('绝密') });
+      var dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料/密码.txt'), { method:'DELETE' });
+      var dd = await dr.json();
+      ok(dr.status === 403 && dd.needPw === true, '受保护文件无密码删除 → 403 needPw', dd);
+
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料/密码.txt') + '&password=wrong', { method:'DELETE' });
+      dd = await dr.json();
+      ok(dr.status === 403 && dd.needPw === true, '错误密码仍被拒', dd);
+
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料/密码.txt') + '&password=' + encodeURIComponent(PW), { method:'DELETE' });
+      dd = await dr.json();
+      ok(dr.status === 200 && dd.ok === true, '正确密码删除成功', dd);
+
+      // 普通文件夹无需密码
+      await c.call(ADMIN + '/api?path=' + encodeURIComponent('普通/随便.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('x') });
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('普通/随便.txt'), { method:'DELETE' });
+      ok(dr.status === 200 && (await dr.json()).ok === true, '普通文件删除不需要密码');
+
+      // 嵌套子目录
+      await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'重要资料', name:'子' });
+      await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料/子/深.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('深') });
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料/子/深.txt'), { method:'DELETE' });
+      ok(dr.status === 403, '受保护文件夹的子目录里的文件也要密码', dr.status);
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料/子/深.txt') + '&password=' + encodeURIComponent(PW), { method:'DELETE' });
+      ok(dr.status === 200, '子目录里带密码可删');
+
+      // 删除受保护文件夹自身
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料') + '&type=dir', { method:'DELETE' });
+      ok(dr.status === 403, '删除受保护文件夹自身需要密码', dr.status);
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('重要资料') + '&type=dir&password=' + encodeURIComponent(PW), { method:'DELETE' });
+      ok(dr.status === 200, '带密码可删受保护文件夹');
+      ok(!R2.map.has('d/重要资料/'), '受保护文件夹已删除');
+    }
+
+    // ============ C. setProtected 上锁/解锁 ============
+    head('setProtected：给已有文件夹上锁');
+    {
+      await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'后加锁' });
+      await c.call(ADMIN + '/api?path=' + encodeURIComponent('后加锁/a.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('x') });
+      var sp = await (await jpost(c.call, ADMIN + '/api', { action:'setProtected', path:'后加锁', protected:true })).json();
+      ok(sp.ok && sp.protected === true, 'setProtected 上锁成功', sp);
+      ok(R2.map.get('d/后加锁/').customMetadata.protected === '1', '占位对象已带标记');
+      var dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('后加锁/a.txt'), { method:'DELETE' });
+      ok(dr.status === 403, '上锁后删除需要密码', dr.status);
+      // 取消保护必须验证管理员密码（后端强制，防手滑）
+      var spNoPw = await (await jpost(c.call, ADMIN + '/api', { action:'setProtected', path:'后加锁', protected:false })).json();
+      ok(spNoPw.ok === false && spNoPw.needPw === true, '取消保护不带密码 → 拒绝 needPw', spNoPw);
+      ok(R2.map.get('d/后加锁/').customMetadata.protected === '1', '被拒绝后标记保持不变');
+      var spWrong = await (await jpost(c.call, ADMIN + '/api', { action:'setProtected', path:'后加锁', protected:false, password:'wrong' })).json();
+      ok(spWrong.ok === false && spWrong.needPw === true, '取消保护密码错误 → 拒绝', spWrong);
+      ok(R2.map.get('d/后加锁/').customMetadata.protected === '1', '密码错误后标记仍保持不变');
+      sp = await (await jpost(c.call, ADMIN + '/api', { action:'setProtected', path:'后加锁', protected:false, password: PW })).json();
+      ok(sp.ok && sp.protected === false, 'setProtected 带密码解锁成功', sp);
+      ok(!R2.map.get('d/后加锁/').customMetadata.protected, '标记已移除');
+      dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('后加锁/a.txt'), { method:'DELETE' });
+      ok(dr.status === 200, '解锁后删除不需要密码');
+      // 对不存在的目录
+      sp = await (await jpost(c.call, ADMIN + '/api', { action:'setProtected', path:'不存在', protected:true })).json();
+      ok(sp.ok === false, '对不存在的文件夹上锁会报错', sp);
+    }
+
+    // ============ D. 批量删除 ============
+    head('批量删除的密码校验');
+    {
+      await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'批量保', protected:true });
+      await c.call(ADMIN + '/api?path=' + encodeURIComponent('批量保/x.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('x') });
+      await c.call(ADMIN + '/api?path=' + encodeURIComponent('批量保/y.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('y') });
+      var bd = await (await jpost(c.call, ADMIN + '/api', { action:'deleteBatch', items:[{path:'批量保/x.txt', isDir:false}] })).json();
+      ok(bd.ok && bd.needPw === true && bd.removed === 0, '批量删受保护内容无密码 → needPw 且未删', bd);
+      bd = await (await jpost(c.call, ADMIN + '/api', { action:'deleteBatch', items:[{path:'批量保/x.txt', isDir:false}], password: PW })).json();
+      ok(bd.ok && bd.removed >= 1, '批量删带密码成功', bd);
+    }
+
+    // ============ E. 改名 / 移动保留标记 ============
+    head('改名 / 移动保留受保护标记');
+    {
+      await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'原名', protected:true });
+      await jpost(c.call, ADMIN + '/api', { action:'rename', path:'原名', newName:'改名后', isDir:true });
+      ok(R2.map.get('d/改名后/') && R2.map.get('d/改名后/').customMetadata.protected === '1', '改名后受保护标记保留');
+      ok(!R2.map.has('d/原名/'), '旧名占位已移除');
+      await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'目标' });
+      await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'目标锁', protected:true });
+      var mvOk = await (await jpost(c.call, ADMIN + '/api', { action:'move', path:'改名后', toDir:'目标锁', newName:'搬过去', isDir:true })).json();
+      ok(mvOk.ok === true, '受保护文件夹搬到保护区内允许', mvOk);
+      ok(R2.map.get('d/目标锁/搬过去/') && R2.map.get('d/目标锁/搬过去/').customMetadata.protected === '1', '移动后受保护标记保留');
+      var dr = await c.call(ADMIN + '/api?path=' + encodeURIComponent('目标锁/搬过去') + '&type=dir', { method:'DELETE' });
+      ok(dr.status === 403, '移动后的受保护文件夹仍要密码', dr.status);
+    }
+
+    // ============ E2. 移动围栏：受保护只能在保护区内移动 ============
+    head('移动围栏');
+    {
+      var c5 = mk();
+      await jpost(c5.call, ADMIN + '/api', { action:'mkdir', path:'', name:'保险箱', protected:true });
+      await jpost(c5.call, ADMIN + '/api', { action:'mkdir', path:'', name:'普通区' });
+      await jpost(c5.call, ADMIN + '/api', { action:'mkdir', path:'', name:'另一区' });
+      await jpost(c5.call, ADMIN + '/api', { action:'mkdir', path:'保险箱', name:'内袋' });
+      await c5.call(ADMIN + '/api?path=' + encodeURIComponent('保险箱/机密.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('s') });
+      await c5.call(ADMIN + '/api?path=' + encodeURIComponent('普通区/公开.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('p') });
+      await c5.call(ADMIN + '/api?path=' + encodeURIComponent('另一区/顺带.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('q') });
+      // 1. 受保护文件搬到普通区：无密码 → 403 needPw，原位置不受影响
+      var m1 = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'保险箱/机密.txt', toDir:'普通区', newName:'机密.txt' })).json();
+      ok(m1.ok === false && m1.needPw === true && /受保护/.test(m1.error || ''), '受保护文件搬出无密码被拒', m1);
+      ok(c5.R2.map.has('d/保险箱/机密.txt'), '被拒后原文件还在');
+      ok(!c5.R2.map.has('d/普通区/机密.txt'), '被拒后目标没有长出文件');
+      // 2. 保护区内移动 → 允许
+      var m2 = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'保险箱/机密.txt', toDir:'保险箱/内袋', newName:'机密.txt' })).json();
+      ok(m2.ok === true, '保护区内移动允许', m2);
+      // 3. 同目录改名 → 允许（保护域不变）
+      var m3 = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'保险箱/内袋/机密.txt', toDir:'保险箱/内袋', newName:'改名.txt' })).json();
+      ok(m3.ok === true, '同目录改名允许', m3);
+      // 4. 受保护文件夹本身搬到普通区：无密码 → 403 needPw
+      var m4 = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'保险箱/内袋', toDir:'普通区', newName:'内袋', isDir:true })).json();
+      ok(m4.ok === false && m4.needPw === true, '受保护文件夹搬出无密码被拒', m4);
+      // 5. 普通文件搬进保护区 → 允许（往保险箱里放东西），进去后受保护规则约束（要密码，见 E3）
+      var m5 = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'普通区/公开.txt', toDir:'保险箱', newName:'公开.txt', password:PW })).json();
+      ok(m5.ok === true, '普通文件搬进保护区（带密码）允许', m5);
+      var dr5 = await c5.call(ADMIN + '/api?path=' + encodeURIComponent('保险箱/公开.txt'), { method:'DELETE' });
+      ok(dr5.status === 403, '搬进保护区后删除要密码', dr5.status);
+      // 6. 批量含搬出项：无密码 → 整批 403 一项都不动；带密码 → 整批搬走；搬出的文件不再受保护
+      var m6 = await (await jpost(c5.call, ADMIN + '/api', { action:'moveBatch', items:[{ path:'保险箱/内袋/改名.txt' }, { path:'另一区/顺带.txt' }], toDir:'普通区' })).json();
+      ok(m6.ok === false && m6.needPw === true, '批量无密码整批被拒', m6);
+      ok(c5.R2.map.has('d/保险箱/内袋/改名.txt') && c5.R2.map.has('d/另一区/顺带.txt'), '整批被拒后两项原位不动');
+      var m6b = await (await jpost(c5.call, ADMIN + '/api', { action:'moveBatch', items:[{ path:'保险箱/内袋/改名.txt' }, { path:'另一区/顺带.txt' }], toDir:'普通区', password:PW })).json();
+      ok(m6b.ok === true && m6b.moved === 2, '批量带密码整批搬走', m6b);
+      var dr6b = await c5.call(ADMIN + '/api?path=' + encodeURIComponent('普通区/改名.txt'), { method:'DELETE' });
+      ok(dr6b.status === 200, '搬出保护区的文件删除不再要密码', dr6b.status);
+      // 7. 靠祖先保护的文件夹带密码搬出 → 成功
+      var m7 = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'保险箱/内袋', toDir:'普通区', newName:'内袋', isDir:true, password:PW })).json();
+      ok(m7.ok === true, '祖先保护的文件夹带密码搬出成功', m7);
+      ok(c5.R2.map.has('d/普通区/内袋/'), '搬出后文件夹占位键存在');
+      // 7b. 给搬出的文件夹上锁 → 成功
+      var lk = await (await jpost(c5.call, ADMIN + '/api', { action:'setProtected', path:'普通区/内袋', protected:true })).json();
+      ok(lk.ok === true, '给搬出的文件夹上锁', lk);
+      // 7c. 自带标记再搬 → 标记跟着文件夹走，换位置不自动解除保护
+      var m7b = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'普通区/内袋', toDir:'另一区', newName:'内袋', isDir:true, password:PW })).json();
+      ok(m7b.ok === true, '自带标记的文件夹带密码搬出成功', m7b);
+      ok(c5.R2.map.get('d/另一区/内袋/') && c5.R2.map.get('d/另一区/内袋/').customMetadata.protected === '1', '搬出后保护标记跟着文件夹走');
+      var dr7b = await c5.call(ADMIN + '/api?path=' + encodeURIComponent('另一区/内袋') + '&type=dir', { method:'DELETE' });
+      ok(dr7b.status === 403, '搬出后删除仍要密码', dr7b.status);
+      // 7d. 无自带标记、仅靠祖先保护的文件夹搬出后 → 不再受保护
+      await jpost(c5.call, ADMIN + '/api', { action:'mkdir', path:'保险箱', name:'临袋' });
+      var m7d = await (await jpost(c5.call, ADMIN + '/api', { action:'move', path:'保险箱/临袋', toDir:'普通区', newName:'临袋', isDir:true, password:PW })).json();
+      ok(m7d.ok === true, '无标记文件夹带密码搬出成功', m7d);
+      var dr7d = await c5.call(ADMIN + '/api?path=' + encodeURIComponent('普通区/临袋') + '&type=dir', { method:'DELETE' });
+      ok(dr7d.status === 200, '仅靠祖先保护搬出后删除不再要密码', dr7d.status);
+      // 8. 下载不受围栏限制
+      var dl = await c5.call(ADMIN + '/api?action=download&path=' + encodeURIComponent('保险箱/公开.txt'));
+      ok(dl.status === 200, '受保护文件下载不受限制', dl.status);
+    }
+
+    // ============ E3. 移入保护区要密码 ============
+    head('移入保护区要密码');
+    {
+      var c6 = mk();
+      await jpost(c6.call, ADMIN + '/api', { action:'mkdir', path:'', name:'保险箱', protected:true });
+      await jpost(c6.call, ADMIN + '/api', { action:'mkdir', path:'', name:'普通区' });
+      await jpost(c6.call, ADMIN + '/api', { action:'mkdir', path:'', name:'普通区2' });
+      await jpost(c6.call, ADMIN + '/api', { action:'mkdir', path:'保险箱', name:'内袋' });
+      await jpost(c6.call, ADMIN + '/api', { action:'mkdir', path:'普通区', name:'件夹' });
+      await c6.call(ADMIN + '/api?path=' + encodeURIComponent('普通区/公开.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('p') });
+      await c6.call(ADMIN + '/api?path=' + encodeURIComponent('普通区2/顺带.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('q') });
+      // 1. 普通文件移入保护区不带密码 → 403 needPw，原位不动
+      var n1 = await (await jpost(c6.call, ADMIN + '/api', { action:'move', path:'普通区/公开.txt', toDir:'保险箱', newName:'公开.txt' })).json();
+      ok(n1.ok === false && n1.needPw === true, '普通文件移入保护区不带密码被拒', n1);
+      ok(c6.R2.map.has('d/普通区/公开.txt') && !c6.R2.map.has('d/保险箱/公开.txt'), '被拒后文件原位不动');
+      // 2. 密码错误 → 拒绝
+      var n2 = await (await jpost(c6.call, ADMIN + '/api', { action:'move', path:'普通区/公开.txt', toDir:'保险箱', newName:'公开.txt', password:'wrong' })).json();
+      ok(n2.ok === false && n2.needPw === true, '移入保护区密码错误被拒', n2);
+      // 3. 密码正确 → 成功，且进去后受保护规则约束
+      var n3 = await (await jpost(c6.call, ADMIN + '/api', { action:'move', path:'普通区/公开.txt', toDir:'保险箱', newName:'公开.txt', password:PW })).json();
+      ok(n3.ok === true, '带密码移入保护区成功', n3);
+      var dr6 = await c6.call(ADMIN + '/api?path=' + encodeURIComponent('保险箱/公开.txt'), { method:'DELETE' });
+      ok(dr6.status === 403, '移入后删除要密码', dr6.status);
+      // 4. 普通文件夹移入保护区也要密码
+      var n4 = await (await jpost(c6.call, ADMIN + '/api', { action:'move', path:'普通区/件夹', toDir:'保险箱', newName:'件夹', isDir:true })).json();
+      ok(n4.ok === false && n4.needPw === true, '普通文件夹移入保护区也要密码', n4);
+      // 5. 保护区内互搬不要密码
+      var n5 = await (await jpost(c6.call, ADMIN + '/api', { action:'move', path:'保险箱/公开.txt', toDir:'保险箱/内袋', newName:'公开.txt' })).json();
+      ok(n5.ok === true, '保护区内互搬不要密码', n5);
+      // 6. 批量原子：混入一项"普通→保护区"且无密码 → 整批 403，一项都不动
+      var n6 = await (await jpost(c6.call, ADMIN + '/api', { action:'moveBatch', items:[{ path:'普通区2/顺带.txt' }, { path:'普通区/件夹', isDir:true }], toDir:'保险箱' })).json();
+      ok(n6.ok === false && n6.needPw === true, '批量无密码整批被拒', n6);
+      ok(c6.R2.map.has('d/普通区2/顺带.txt') && c6.R2.map.has('d/普通区/件夹/'), '整批被拒后两项原位不动');
+      // 7. 批量带密码 → 全部搬走
+      var n7 = await (await jpost(c6.call, ADMIN + '/api', { action:'moveBatch', items:[{ path:'普通区2/顺带.txt' }, { path:'普通区/件夹', isDir:true }], toDir:'保险箱', password:PW })).json();
+      ok(n7.ok === true && n7.moved === 2, '批量带密码全部搬走', n7);
+      // 8. 未设 PASSWORD 的站点：移入直接被拒且带 noPwSet
+      var c7 = mk({ PASSWORD: undefined });
+      await jpost(c7.call, ADMIN + '/api', { action:'mkdir', path:'', name:'箱', protected:true });
+      await jpost(c7.call, ADMIN + '/api', { action:'mkdir', path:'', name:'普' });
+      await c7.call(ADMIN + '/api?path=' + encodeURIComponent('普/a.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('x') });
+      var n8 = await (await jpost(c7.call, ADMIN + '/api', { action:'move', path:'普/a.txt', toDir:'箱', newName:'a.txt', password:'whatever' })).json();
+      ok(n8.ok === false && n8.needPw === true && n8.noPwSet === true, '未设密码时移入被拒且带 noPwSet', n8);
+    }
+
+    // ============ F2. 受保护排序在前 + 树节点标记 ============
+    head('受保护文件夹排最前 + 树里带 pr 标记');
+    {
+      var c4 = mk();
+      await jpost(c4.call, ADMIN + '/api', { action:'mkdir', path:'', name:'aaa' });                 // 名称最靠前
+      await jpost(c4.call, ADMIN + '/api', { action:'mkdir', path:'', name:'mmm' });
+      await jpost(c4.call, ADMIN + '/api', { action:'mkdir', path:'', name:'zzz', protected:true }); // 名称最后，但受保护
+      var d4 = await jget(c4.call, ADMIN + '/api?action=treeFull');
+      var kids = d4.tree.d.map(function(n){ return n.n; });
+      ok(kids[0] === 'zzz', '目录树里受保护文件夹排到最前', kids);
+      var z = d4.tree.d.filter(function(n){ return n.n === 'zzz'; })[0];
+      ok(z && z.pr === 1, '受保护树节点带 pr=1', z && z.pr);
+      var a = d4.tree.d.filter(function(n){ return n.n === 'aaa'; })[0];
+      ok(a && !a.pr, '普通树节点没有 pr');
+      ok(JSON.stringify(kids) === JSON.stringify(['zzz','aaa','mmm']), '其余仍按名称排序', kids);
+    }
+
+    // ============ E4. HTML 预览不依赖存储类型 ============
+    head('HTML 预览（存成 octet-stream 也能预览）');
+    {
+      var c8 = mk();
+      var hsrc = '<!doctype html><html><head><meta charset="utf-8"><title>t</title></head><body><h1>T</h1></body></html>';
+      // 存成 octet-stream（上传端没给 file.type 时就是这样）
+      var pr = await c8.call(ADMIN + '/api?path=' + encodeURIComponent('页/oct2.html'), { method:'PUT', headers:{'Content-Type':'application/octet-stream'}, body: enc(hsrc) });
+      ok(pr.status === 200, 'octet-stream 存入 html', pr.status);
+      var dc = await c8.call(ADMIN + '/f/' + encodeURIComponent('页') + '/' + encodeURIComponent('oct2.html') + '?doc=1');
+      var dt = await dc.text();
+      ok(dc.status === 200 && (dc.headers.get('Content-Type') || '').indexOf('text/html') === 0, '管理端 ?doc=1 按 text/html 返回', dc.status + ' ' + dc.headers.get('Content-Type'));
+      ok(dt.indexOf('<base href="/adm-123/f/') === 0 || dt.indexOf('<base href=') >= 0, '真文档注入了 base', dt.slice(0, 80));
+      var sh8 = await (await jpost(c8.call, ADMIN + '/api', { action:'share', path:'页/oct2.html', expiresIn:0 })).json();
+      ok(sh8.ok && sh8.token, '分享创建成功', sh8);
+      var sl = await c8.call('/s/' + sh8.token + '/oct2.html');
+      var slt = await sl.text();
+      ok(sl.status === 200 && (sl.headers.get('Content-Type') || '').indexOf('text/html') === 0 && slt.indexOf('分享预览') >= 0, '分享壳页面正常（不是 octet-stream 下载）', sl.status + ' ' + sl.headers.get('Content-Type'));
+      var sd = await c8.call('/s/' + sh8.token + '/oct2.html?doc=1');
+      var sdt = await sd.text();
+      ok(sd.status === 200 && sdt.indexOf('<base href="/s/' + sh8.token + '/"') >= 0, '分享真文档正常', sdt.slice(0, 100));
+    }
+
+    // ============ F. 分享页不泄露受保护标记 ============
+    head('分享页（只读）不返回受保护标记');
+    {
+      await jpost(c.call, ADMIN + '/api', { action:'mkdir', path:'', name:'共享目录', protected:true });
+      var sh = await (await jpost(c.call, ADMIN + '/api', { action:'share', path:'共享目录', expiresIn:0 })).json();
+      if (!sh.ok || !sh.token){ ok(false, '创建分享失败', sh); }
+      else {
+        var d = await jget(c.call, '/s/' + sh.token + '/api?action=treeFull');
+        ok(Array.isArray(d.protected) && d.protected.length === 0, '访客的 treeFull 不含 protected', d.protected);
+      }
+    }
+
+    // ============ G. 未设置 PASSWORD 时的行为 ============
+    head('未设置 PASSWORD 的站点');
+    {
+      var c2 = mk({ PASSWORD: undefined });
+      // 上面 cookie 不再匹配；但未设密码时不做鉴权，请求照样通过
+      await jpost(c2.call, ADMIN + '/api', { action:'mkdir', path:'', name:'锁', protected:true });
+      await c2.call(ADMIN + '/api?path=' + encodeURIComponent('锁/a.txt'), { method:'PUT', headers:{'Content-Type':'text/plain'}, body: enc('x') });
+      var dr = await c2.call(ADMIN + '/api?path=' + encodeURIComponent('锁/a.txt'), { method:'DELETE' });
+      var dd = await dr.json();
+      ok(dr.status === 403 && dd.needPw === true, '未设密码时受保护删除被拒，而不是静默删除', dd);
+      // 未设密码时取消保护也要被拒，并且明确告诉前端"再弹窗也没用"（noPwSet）
+      var sp2 = await (await jpost(c2.call, ADMIN + '/api', { action:'setProtected', path:'锁', protected:false, password:'whatever' })).json();
+      ok(sp2.ok === false && sp2.needPw === true && sp2.noPwSet === true, '未设密码时取消保护被拒且带 noPwSet', sp2);
+      ok(c2.R2.map.get('d/锁/').customMetadata.protected === '1', '未设密码时保护标记不会被移除');
+    }
+
+    // ============ H. 前端脚本语法 ============
+    head('管理页内联脚本语法');
+    {
+      var html = await (await c.call(ADMIN)).text();
+      var re = /<script nonce="[^"]*">([\s\S]*?)<\/script>/g;
+      var m, n = 0, bad = 0;
+      while ((m = re.exec(html))){
+        n++;
+        try { new Function("'use strict';\n" + m[1]); }
+        catch (e){ bad++; log('  内联脚本 #' + n + ' 语法错误: ' + e.message); }
+      }
+      ok(n >= 1 && bad === 0, '管理页内联脚本可解析（共 ' + n + ' 段，严格模式）');
+      ok(html.indexOf('id="clientScript"') < 0, '(sanity)');
+      // 抽查关键函数确实进入了页面脚本
+      var app = (re.lastIndex = 0, (function(){ var x, last=''; while ((x = re.exec(html))) last = x[1]; return last; })());
+      ok(app.indexOf('function doSetProtected') >= 0, '页面脚本含 doSetProtected');
+      ok(app.indexOf('function sendSetProtected') >= 0, '页面脚本含 sendSetProtected');
+      ok(app.indexOf('function askAdminPassword') >= 0, '页面脚本含 askAdminPassword');
+      ok(app.indexOf('sect-prot') >= 0, '页面脚本含分区栏 sect-prot');
+      ok(app.indexOf('tsec-prot') >= 0, '页面脚本含目录树分区 tsec-prot');
+      ok(app.indexOf('function isProtDir') >= 0, '页面脚本含 isProtDir');
+      ok(app.indexOf('function moveOutLocal') >= 0, '页面脚本含 moveOutLocal');
+      ok(app.indexOf('function moveIntoLocal') >= 0, '页面脚本含 moveIntoLocal');
+      ok(app.indexOf('function isProtLocal') >= 0, '页面脚本含 isProtLocal');
+      ok(app.indexOf('pwFor') >= 0, '页面脚本按搬入/搬出区分密码提示');
+      ok(app.indexOf('data-shgo') >= 0, '目录树分享图标可点（data-shgo）');
+      ok(app.indexOf('function openSharedLink') >= 0, '页面脚本含 openSharedLink');
+      ok(app.indexOf('function uploadCt') >= 0, '页面脚本含 uploadCt');
+      ok(app.indexOf("class=\"band\"") >= 0, "band strip");
+      ok(app.indexOf('function dirNodeHtml') >= 0, '页面脚本含 dirNodeHtml');
+      ok(app.indexOf('treeProtected') >= 0, '页面脚本含 treeProtected');
+      ok(app.indexOf('setProtected') >= 0, '页面脚本含 setProtected 调用');
+    }
+  } catch (e) {
+    log('HARNESS ERROR: ' + (e && e.stack || e));
+    fail++;
+  }
+
+  log('\nRESULT pass=' + pass + ' fail=' + fail);
+  document.title = 'done ' + pass + '/' + fail;
+})();
+</script>
+</body></html>

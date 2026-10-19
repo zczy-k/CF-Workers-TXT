@@ -64,6 +64,29 @@ const String _template = r'''
   // 分片读内存 blob 时的单片大小（见 sendBlobUrl / feedBlob）。
   var CHUNK = 256 * 1024;
 
+  // blob: URL → 页面刚生成的 Blob 本体。
+  // 站点拼好 zip 后走的是 URL.createObjectURL(blob) + a[download].click()，
+  // 这里在源头把 Blob 抓住，落盘时就不必再 fetch('blob:…') —— 后者在部分
+  // WebView 里会直接失败，表现正是"点了没反应、什么都下不了"。
+  var WS_BLOBS = {};
+  var WS_BLOB_MAX = 32;
+  (function () {
+    var origCreate = URL.createObjectURL;
+    if (typeof origCreate !== 'function') { return; }
+    URL.createObjectURL = function (blob) {
+      var url = origCreate.call(URL, blob);
+      try {
+        if (blob instanceof Blob) {
+          WS_BLOBS[url] = blob;
+          var keys = Object.keys(WS_BLOBS);
+          if (keys.length > WS_BLOB_MAX) { delete WS_BLOBS[keys[0]]; }
+          setTimeout(function () { delete WS_BLOBS[url]; }, 60000);
+        }
+      } catch (e) { }
+      return url;
+    };
+  })();
+
   function post(name, payload) {
     try {
       if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
@@ -161,10 +184,41 @@ const String _template = r'''
   }
 
   function sendBlobUrl(url, name) {
+    var key = newKey(url);
+    // 首选：页面刚 createObjectURL 出来的 Blob 本体还在手里，直接用。
+    var cached = WS_BLOBS[url];
+    if (!cached && url.indexOf('blob:') === 0) {
+      // absolute() 会规范化过 href，逐条前缀比对兜底，保证仍能命中本体。
+      var keys = Object.keys(WS_BLOBS);
+      for (var i = 0; i < keys.length; i++) {
+        if (keys[i] === url || keys[i].indexOf(url) === 0 || url.indexOf(keys[i]) === 0) {
+          cached = WS_BLOBS[keys[i]];
+          delete WS_BLOBS[keys[i]];
+          break;
+        }
+      }
+    }
+    if (cached) {
+      feedBlob(cached, key, name);
+      return;
+    }
     fetch(url).then(function (r) { return r.blob(); }).then(function (blob) {
-      feedBlob(blob, newKey(url), name);
-    }).catch(function (e) {
-      post('blobError', { url: url, message: String(e) });
+      feedBlob(blob, key, name);
+    }).catch(function () {
+      // fetch 读不了 blob: 时退到 XHR —— 老 WebView 对 blob: 的 fetch 支持不全。
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        xhr.responseType = 'blob';
+        xhr.onload = function () {
+          if (xhr.response) { feedBlob(xhr.response, key, name); }
+          else { post('blobError', { url: url, message: '空响应' }); }
+        };
+        xhr.onerror = function () { post('blobError', { url: url, message: '读取失败' }); };
+        xhr.send();
+      } catch (e) {
+        post('blobError', { url: url, message: String(e) });
+      }
     });
   }
 
