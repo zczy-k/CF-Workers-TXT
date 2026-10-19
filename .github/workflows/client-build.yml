@@ -22,6 +22,11 @@ env:
   ORG: dev.cfwtxt
   APP: cfwtxt
 
+# 临时诊断用：构建失败时把日志推到 ci-log 分支（公开仓库，匿名可读）。
+# 日志拿全、问题修完就把这个权限和"发布构建日志"那一步一起删掉。
+permissions:
+  contents: write
+
 jobs:
   # ---------------------------------------------------------------- 纯 Dart 单测
   # 先跑这个：几秒钟就能把 URL 解析 / 认证 / API 封装 / 同步引擎的逻辑错误挡住，
@@ -125,10 +130,15 @@ jobs:
       # android/app/build.gradle(.kts) 里接上 signingConfig —— 但那属于"分发"环节，
       # 不该成为"能不能编译通过"的前提。
       - name: 构建 release APK
+        id: build
         working-directory: client/app
-        run: flutter build apk --release
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee "$RUNNER_TEMP/android-build.log"
 
       - name: 重命名产物
+        if: steps.build.outcome == 'success'
         working-directory: client/app
         run: |
           mkdir -p "$RUNNER_TEMP/out"
@@ -136,11 +146,27 @@ jobs:
              "$RUNNER_TEMP/out/cfwtxt-${{ github.run_number }}.apk"
 
       - uses: actions/upload-artifact@v4
+        if: steps.build.outcome == 'success'
         with:
           name: cfwtxt-android-apk
           path: ${{ runner.temp }}/out/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      # 临时诊断用：GitHub 上 actions 日志要登录才能看，这里把日志推到 ci-log 分支，
+      # 匿名就能用 raw.githubusercontent.com 读回来。看完就删。
+      - name: 发布构建日志（临时诊断）
+        if: steps.build.outcome == 'failure'
+        run: |
+          git config user.name ci-bot
+          git config user.email ci-bot@users.noreply.github.com
+          mkdir -p ci-logs
+          cp "$RUNNER_TEMP/android-build.log" ci-logs/android-build.log
+          git checkout -B ci-log
+          git add -f ci-logs/android-build.log
+          git commit -m "ci: android build log (run ${{ github.run_id }})"
+          git push -f origin ci-log
+          exit 1
 
   # ---------------------------------------------------------------- Windows
   windows:
