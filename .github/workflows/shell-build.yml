@@ -1,0 +1,281 @@
+name: shell-build
+
+# 万能壳的构建。两种产物都从这里出：
+#   * 直接 push：打"通用壳"（没有预置站点，用户自己加）—— 用来验证代码能编译、能跑；
+#   * 手动 Run workflow 填参数：打"白标版"（预置站点 + 自己的名字/包名/图标/主题色）。
+# 白标不是另一份代码：只是构建期覆盖 assets/preset.json 与平台图标。
+on:
+  push:
+    paths:
+      - 'shell/**'
+      - '.github/workflows/shell-build.yml'
+  pull_request:
+    paths:
+      - 'shell/**'
+      - '.github/workflows/shell-build.yml'
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App 名字（安卓桌面图标名 / Windows 窗口标题）。留空 = WebShell'
+        required: false
+        default: ''
+      app_id:
+        description: '包名/组织名，例如 com.corp.oa。留空 = dev.webshell.app'
+        required: false
+        default: ''
+      preset_url:
+        description: '预置站点地址（白标版入口，例如 oa.corp.com）。留空 = 通用壳'
+        required: false
+        default: ''
+      preset_name:
+        description: '预置站点在列表里显示的名字。留空 = 用域名'
+        required: false
+        default: ''
+      theme_color:
+        description: '主题色 #RRGGBB。留空 = #2962FF'
+        required: false
+        default: ''
+      logo_url:
+        description: '图标图片地址（PNG/JPG/ICO）。留空则看下面两项'
+        required: false
+        default: ''
+      logo_path:
+        description: '仓库里的图标文件路径，例如 shell/branding/logo.png'
+        required: false
+        default: ''
+      auto_icon:
+        description: '没给图标时，自动抓预置站点的 favicon 生成各个尺寸'
+        required: false
+        type: boolean
+        default: true
+      allow_add_site:
+        description: '白标版是否仍允许用户自己再加站点'
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: shell-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_CHANNEL: stable
+
+jobs:
+  # ---------------------------------------------------------------- 纯 Dart 单测
+  # 先跑这个：URL 规则、配置容错、下载队列（续传/重试/并发/取消）几秒钟就能验证完，
+  # 而 Flutter 编译（尤其 Windows）要几分钟，没必要让它先跑。
+  test-core:
+    name: core 单测（dart test）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shell/core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: 版本自检
+        run: dart --version
+
+      - run: dart pub get
+
+      # 注意：**不要**加 --no-fatal-infos —— Dart 3.13 起这个选项已被移除（传了会以
+      # "Cannot negate option" 直接退出 64，看着像代码错，其实是用法错）。
+      - name: 静态分析（只把 error 当失败）
+        run: dart analyze --no-fatal-warnings
+
+      - name: 单元测试
+        run: dart test -r expanded
+
+  # ---------------------------------------------------------------- 白标产物
+  # 图标要按密度切、还要转 .ico，放在 ubuntu 上做（自带 ImageMagick），
+  # 两个平台 job 再从产物里取，保证两端口径一致。
+  branding:
+    name: 白标产物（图标 + preset.json）
+    needs: test-core
+    runs-on: ubuntu-latest
+    env:
+      APP_NAME: ${{ github.event.inputs.app_name }}
+      APP_ID: ${{ github.event.inputs.app_id }}
+      PRESET_URL: ${{ github.event.inputs.preset_url }}
+      PRESET_NAME: ${{ github.event.inputs.preset_name }}
+      THEME_COLOR: ${{ github.event.inputs.theme_color }}
+      LOGO_URL: ${{ github.event.inputs.logo_url }}
+      LOGO_PATH: ${{ github.event.inputs.logo_path }}
+      AUTO_ICON: ${{ github.event.inputs.auto_icon || 'true' }}
+      ALLOW_ADD_SITE: ${{ github.event.inputs.allow_add_site || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 生成图标与白标配置
+        run: bash shell/tools/branding.sh "$RUNNER_TEMP/branding"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shell-branding
+          path: ${{ runner.temp }}/branding
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------- Android
+  android:
+    name: Android APK
+    needs: [test-core, branding]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shell/app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: shell-branding
+          path: ${{ runner.temp }}/branding
+
+      - name: 读取本次白标参数
+        run: |
+          cat "$RUNNER_TEMP/branding/app-id.env" >> "$GITHUB_ENV"
+          echo "本次构建：$APP_ID_EFFECTIVE（$APP_NAME_EFFECTIVE）"
+
+      # 仓库里**故意不存** android/ 这一堆生成文件：Gradle 版本、AGP、模板都会随
+      # Flutter 升级变化，存进来迟早和 SDK 打架。现生成再拷回来，只留 lib/ 作真相源。
+      - name: 生成 Android 平台脚手架
+        run: |
+          flutter create \
+            --platforms=android \
+            --org "$ORG" \
+            --project-name "$NAME" \
+            "$RUNNER_TEMP/scaffold"
+          cp -r "$RUNNER_TEMP/scaffold/android" ./android
+
+      - name: 放入白标图标与预置配置
+        run: |
+          cp -r "$RUNNER_TEMP/branding/android-res/." android/app/src/main/res/
+          cp "$RUNNER_TEMP/branding/preset.json" assets/preset.json
+          python3 "$GITHUB_WORKSPACE/shell/tools/patch_platform.py" \
+            manifest android/app/src/main/AndroidManifest.xml "$APP_NAME_EFFECTIVE"
+
+      - name: pub get
+        run: flutter pub get
+
+      - name: 静态分析（只把 error 当失败）
+        # 与 core 的 `dart analyze` 相反：flutter analyze 默认把 info 也算致命
+        # （本地 3.47.7 实测：只报 info 也会退 1），所以这里必须显式带 --no-fatal-infos。
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      # Flutter 模板的 release 默认用 debug keystore 签名，所以不配 Secrets 也能出
+      # 一个可侧载安装的 APK。要正式签名请在 Secrets 里放 keystore 再改 build.gradle。
+      - name: 构建 release APK
+        run: flutter build apk --release
+
+      - name: 重命名产物
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "$RUNNER_TEMP/out/webshell-${APP_ID_EFFECTIVE}-${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webshell-android-apk
+          path: ${{ runner.temp }}/out/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------- Windows
+  windows:
+    name: Windows 便携版
+    needs: [test-core, branding]
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: shell/app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: shell-branding
+          path: ${{ runner.temp }}/branding
+
+      - name: 读取本次白标参数
+        shell: pwsh
+        run: |
+          Get-Content "$env:RUNNER_TEMP\branding\app-id.env" | ForEach-Object {
+            if ($_ -match '^([A-Z_]+)=(.*)$') {
+              Add-Content -Path $env:GITHUB_ENV -Value "$($matches[1])=$($matches[2])" -Encoding utf8
+            }
+          }
+
+      - name: 打开桌面支持
+        run: flutter config --enable-windows-desktop
+
+      # flutter_inappwebview 的 Windows 端在 CMake 配置阶段要调用 nuget 拉
+      # WebView2 / WIL / nlohmann.json。runner 上通常自带，兜底装一次，别让它半夜炸。
+      - name: 确保 nuget 可用
+        shell: pwsh
+        run: |
+          if (-not (Get-Command nuget -ErrorAction SilentlyContinue)) {
+            choco install nuget.commandline -y --no-progress
+            Add-Content -Path $env:GITHUB_PATH -Value "C:\ProgramData\chocolatey\bin"
+          }
+          (Get-Command nuget).Source
+
+      - name: 生成 Windows 平台脚手架
+        shell: pwsh
+        run: |
+          flutter create --platforms=windows --org "$env:ORG" --project-name "$env:NAME" "$env:RUNNER_TEMP\scaffold"
+          Copy-Item -Recurse "$env:RUNNER_TEMP\scaffold\windows" ".\windows"
+
+      - name: 换成白标图标、窗口标题与预置配置
+        shell: pwsh
+        run: |
+          Copy-Item "$env:RUNNER_TEMP\branding\app_icon.ico" "windows\runner\resources\app_icon.ico" -Force
+          Copy-Item "$env:RUNNER_TEMP\branding\preset.json" "assets\preset.json" -Force
+          python "$env:GITHUB_WORKSPACE\shell\tools\patch_platform.py" windows "windows" "$env:APP_NAME_EFFECTIVE"
+
+      - name: pub get
+        run: flutter pub get
+
+      - name: 静态分析（只把 error 当失败）
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: 构建 release
+        run: flutter build windows --release
+
+      # 只拷 exe 是不够的：同目录的 flutter_windows.dll 与 data/ 缺一不可，
+      # 所以压的是整个 Release 目录，解压即用。
+      - name: 打包便携版
+        shell: pwsh
+        run: |
+          $src = "build\windows\x64\runner\Release"
+          if (-not (Test-Path $src)) { throw "没找到产物目录：$src" }
+          $out = "$env:RUNNER_TEMP\webshell-windows-$env:APP_ID_EFFECTIVE.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $out -CompressionLevel Optimal
+          Write-Host "产物：" (Get-Item $out).Length "bytes"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webshell-windows-x64
+          path: ${{ runner.temp }}/webshell-windows-*.zip
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,9 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-raw-types: false
+  errors:
+    # 配置来自"用户手改过的 json"，字段缺失是常态，不该按错误处理
+    unused_import: warning

@@ -1,0 +1,45 @@
+name: webshell
+description: WebShell 万能壳 —— 把任意网站变成独立 App（不依赖本地浏览器，支持多站点、下载到本地、上传、自定义名字与图标）
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  # 依赖下限来自这几个插件：flutter_file_dialog 要 3.44+，flutter_secure_storage 11 要 Dart 3.8+。
+  sdk: '>=3.12.0 <4.0.0'
+  flutter: '>=3.44.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # 壳逻辑全在这里：站点档案、配置持久化、URL 规则、下载队列（纯 Dart，可在 CI 里 dart test）
+  webshell_core:
+    path: ../core
+
+  # 引擎：Android 用系统 WebView，Windows 用 WebView2，两端同一套 API。
+  # 选它的关键是它把"下载事件 / 文件选择 / 新窗口 / Cookie / 注入脚本"都暴露出来了，
+  # 而这些正是"网页转 APP 工具"缺掉、导致翻页下载全废的能力。
+  flutter_inappwebview: ^6.1.5
+
+  # 应用私有目录、图标缓存目录、Android 的应用外部目录
+  path_provider: ^2.1.6
+  # tel:/mailto: 等外部协议，以及用系统浏览器打开
+  url_launcher: ^6.3.3
+  # Windows 上选下载目录
+  file_picker: ^13.1.0
+  # Android：'另存为'到系统「下载」或任意目录（SAF，不需要存储权限）
+  flutter_file_dialog: ^3.3.3
+  # Android：用系统程序打开下载好的文件
+  open_filex: ^5.0.0
+  # Basic Auth 的密码：进系统安全存储（Keystore / DPAPI），绝不写进配置文件
+  flutter_secure_storage: ^11.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    # 白标配置：通用壳的默认值就在仓库里，CI 会按 workflow 输入重写它再打包。
+    - assets/preset.json
