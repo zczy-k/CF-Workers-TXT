@@ -52,7 +52,7 @@ class _SyncPageState extends State<SyncPage> {
 
   Future<void> _pickDir() async {
     try {
-      final dir = await FilePicker.platform.getDirectoryPath(dialogTitle: '选择同步目录');
+      final dir = await FilePicker.getDirectoryPath(dialogTitle: '选择同步目录');
       if (dir == null || !mounted) return;
       setState(() => _root = dir);
     } on Object catch (e) {

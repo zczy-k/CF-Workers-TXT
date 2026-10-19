@@ -370,9 +370,10 @@ class _HomePageState extends State<HomePage> {
 
   /// 上传。同名文件**先问一句**再动手 —— 网页端就是这么做的，客户端也不能默认覆盖。
   Future<void> _upload() async {
-    final picked = await FilePicker.platform.pickFiles(allowMultiple: true);
-    if (picked == null || picked.files.isEmpty) return;
-    final paths = picked.files.map((f) => f.path).whereType<String>().toList();
+    // file_picker 13 起改成静态 API：pickFiles() 本身就允许多选，取消时返回空列表（不再有 null）
+    final picked = await FilePicker.pickFiles();
+    if (picked.isEmpty) return;
+    final paths = picked.map((f) => f.path).whereType<String>().toList();
     if (paths.isEmpty) return;
 
     // 云端现有文件（比对同名）
