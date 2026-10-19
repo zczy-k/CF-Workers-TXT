@@ -6,6 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+// CacheMode_ 是 InAppWebViewSettings.cacheMode 字段的实际类型，但上游包的
+// 导出列表（types/main.dart 的 show 子句）只放行了不带下划线的 CacheMode，
+// 从包入口拿不到，只能直接引 platform_interface 的源文件（字段就是它定义的，
+// 赋值绕不开这个类型）。
+import 'package:flutter_inappwebview_platform_interface/src/types/cache_mode.dart'
+    show CacheMode_;
 import 'package:webshell_core/webshell_core.dart';
 
 import '../engine/scripts.dart';
