@@ -44,15 +44,12 @@ jobs:
 
       - run: dart pub get
 
-      - name: 静态分析（仅报告，不拦构建）
-        run: dart analyze || true
+      # 本地已用 Flutter 3.47.7 的 dart analyze + dart test 全绿校验过，所以这里恢复成硬门禁：
+      # error 才失败，info/warning 只打印（避免 Flutter 版本升级带来的风格提示把构建卡死）。
+      - name: 静态分析（只把 error 当失败）
+        run: dart analyze --no-fatal-infos --no-fatal-warnings
 
       - name: 单元测试
-        # 第一次跑的时候允许失败：这份代码是在**没有本地 Dart/Flutter** 的环境里写的，
-        # 单测里的断言很可能需要按真实行为微调。但如果让它硬拦构建，就会出现
-        # "一个断言写错 → 一个安装包都拿不到"。所以先让它以黄色警告的形式暴露问题，
-        # 等第一次绿了以后把 `continue-on-error` 删掉，恢复成硬门禁。
-        continue-on-error: true
         run: dart test -r expanded
 
   # ---------------------------------------------------------------- Android
