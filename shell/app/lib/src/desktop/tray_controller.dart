@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show ByteData, rootBundle;
 import 'package:path_provider/path_provider.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
@@ -55,7 +55,8 @@ class TrayController with TrayListener, WindowListener {
       // 图标解不出来不挡启动：托盘里没图标，但窗口行为不受影响。
     }
     await trayManager.setToolTip(appName);
-    await trayManager.setMenu(Menu(items: <MenuItem>[
+    // tray_manager 0.5.x 的 API 叫 setContextMenu（不是 setMenu）
+    await trayManager.setContextMenu(Menu(items: <MenuItem>[
       MenuItem(key: 'show', label: '打开 $appName'),
       MenuItem.separator(),
       MenuItem(key: 'quit', label: '退出'),
