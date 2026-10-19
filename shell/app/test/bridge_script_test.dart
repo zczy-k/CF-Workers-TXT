@@ -99,11 +99,20 @@ void main() {
       expect(js.contains('origWindowOpen'), isTrue);
       // 程序化 a.click()（很多文件保存库不把它插进 DOM，事件不冒泡）单独劫持
       expect(js.contains('HTMLAnchorElement.prototype.click'), isTrue);
-      // 服务端生成的下载：fetch/XHR 响应头是 Content-Disposition: attachment
-      expect(js.contains('content-disposition'), isTrue);
+      // 内存字节落盘通道要接上：blob: / data: / 页面拼好的 zip 都走这条
       expect(js.contains('blobStart'), isTrue, reason: '内存字节落盘通道要接上');
       // POST 表单提交回附件的场景
       expect(js.contains("addEventListener('submit'"), isTrue);
+      // 回归护栏：**不许**再接管 fetch/XHR 的 Content-Disposition 响应。
+      // 原生浏览器里 fetch/XHR 拿到的响应永不触发下载（哪怕带 attachment），而
+      // "打包下载"恰恰是页面自己逐个 fetch 文件、再在前端拼成一个 zip
+      // （本仓库 worker.js 的 packDownload 就是如此，单文件响应头正是 attachment）。
+      // 一旦接管，一次打包下载就会被拆成 N 个散文件 —— 这正是"应该是一个 zip、
+      // 结果下了好几个文件"的根因，必须保持移除。
+      expect(js.contains('content-disposition'), isFalse,
+          reason: 'fetch/XHR 的 attachment 接管必须保持移除，否则打包下载会被拆散');
+      expect(js.contains('getResponseHeader'), isFalse,
+          reason: 'XHR 侧同样不许再读 Content-Disposition');
     });
   });
 }
