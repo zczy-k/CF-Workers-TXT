@@ -327,7 +327,7 @@ jobs:
           flutter create --platforms=windows --org "$env:ORG" --project-name "$env:NAME" "$env:RUNNER_TEMP\scaffold"
           Copy-Item -Recurse "$env:RUNNER_TEMP\scaffold\windows" ".\windows"
 
-      - name: 换成白标图标、窗口标题与预置配置
+      - name: 换成白标图标、窗口标题与预置配置（并打 Windows 编译补丁）
         shell: pwsh
         run: |
           # Continue + 显式 -ErrorAction Stop：既不让原生命令的 stderr 变成终止错误
@@ -371,8 +371,18 @@ jobs:
               $lines.Add((& $chosen.exe @argv 2>&1 | Out-String))
               $code = $LASTEXITCODE
               if ($null -eq $code) { $code = 0 }
-              $lines.Add("patch_platform.py 退出码：$code")
+              $lines.Add("patch_platform.py windows 退出码：$code")
               if ($code -ne 0) { $fail = $code }
+
+              # MSVC 14.51 起 /await 与 <experimental/coroutine> 是硬错误，而上游
+              # flutter_inappwebview_windows 还在用；给 CMakeLists.txt 注入静音宏。
+              $cmake = "$env:GITHUB_WORKSPACE\shell\app\windows\CMakeLists.txt"
+              $argv2 = @($pre) + @($script, 'cmake', $cmake)
+              $lines.Add((& $chosen.exe @argv2 2>&1 | Out-String))
+              $code2 = $LASTEXITCODE
+              if ($null -eq $code2) { $code2 = 0 }
+              $lines.Add("patch_platform.py cmake 退出码：$code2")
+              if ($code2 -ne 0) { $fail = $code2 }
             }
           } catch {
             $fail = 1

@@ -8,6 +8,7 @@
 用法：
   patch_platform.py manifest <AndroidManifest.xml> <App 名字>
   patch_platform.py windows  <windows 目录>        <App 名字>
+  patch_platform.py cmake    <windows/CMakeLists.txt>
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ import argparse
 import pathlib
 import re
 import sys
+
+# 微软在 STL1011 报错里给出的逃生宏（见 patch_windows_cmake 的说明）
+_COROUTINE_SILENCE_MACRO = "_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
 
 
 def _force_utf8_output() -> None:
@@ -99,6 +103,48 @@ def patch_windows(dir_path: str, app_name: str) -> None:
             print("提示：App 名不是纯 ASCII，跳过 Runner.rc（窗口标题仍然会改）")
 
 
+def patch_windows_cmake(path: str) -> None:
+    """给 windows/CMakeLists.txt 注入一个编译宏，让上游插件能被新 MSVC 编过。
+
+    真事：MSVC 14.51（VS 18）起，`/await` 与 <experimental/coroutine> 会直接硬报
+    STL1011（"deprecated by Microsoft and will be REMOVED SOON"），而
+    flutter_inappwebview_windows 经 WebView2 / WIL 的 cppcoro 代码还在用它们，
+    于是 Windows 端在编译插件时就挂了。
+
+    微软在报错信息里直接给了逃生门：定义
+    `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS` 即可压住。
+    这里把定义加到**应用自己的** windows/CMakeLists.txt（不是去改 pub cache），
+    位置紧跟 project()，这样后面 add_subdirectory 进来的各插件目标都能吃到。
+    上游改用 C++20 coroutine 后，这段就只剩一个无害的宏定义。
+    """
+    p = pathlib.Path(path)
+    if not p.exists():
+        raise SystemExit("错误：找不到 %s（Windows 脚手架没生成？）" % p)
+    s = p.read_text(encoding="utf-8")
+    if _COROUTINE_SILENCE_MACRO in s:
+        print("已有静音宏，无需改：", p)
+        return
+
+    inject = (
+        "\n"
+        "# === 构建期注入（CI）：见 shell/tools/patch_platform.py 同名函数 ===\n"
+        "# MSVC 14.51 起 /await 与 <experimental/coroutine> 是硬错误，上游插件还在用，\n"
+        "# 用微软自己给的宏压住（放在 project() 之后，插件目标才能继承到）。\n"
+        "add_compile_definitions(%s)\n" % _COROUTINE_SILENCE_MACRO
+    )
+    # 锚点优先 project(...)：它一定在所有 add_subdirectory / generated_plugins 之前。
+    for pattern in (r"^project\(.*\)\s*$", r"^cmake_minimum_required\(.*\)\s*$"):
+        new, n = re.subn(pattern, lambda m: m.group(0) + inject, s, count=1, flags=re.M)
+        if n:
+            p.write_text(new, encoding="utf-8")
+            print("已改：", p)
+            return
+    raise SystemExit(
+        "错误：%s 里没找到 project(...) 或 cmake_minimum_required(...)，"
+        "不敢盲插（Flutter 模板可能变了），请人工看一眼" % p
+    )
+
+
 def main() -> int:
     _force_utf8_output()
     ap = argparse.ArgumentParser(description="构建期平台文件补丁")
@@ -112,11 +158,16 @@ def main() -> int:
     w.add_argument("dir")
     w.add_argument("app_name")
 
+    c = sub.add_parser("cmake", help="给 windows/CMakeLists.txt 注入 MSVC 静音宏")
+    c.add_argument("path")
+
     args = ap.parse_args()
     if args.cmd == "manifest":
         patch_manifest(args.path, args.label)
     elif args.cmd == "windows":
         patch_windows(args.dir, args.app_name)
+    elif args.cmd == "cmake":
+        patch_windows_cmake(args.path)
     return 0
 
 

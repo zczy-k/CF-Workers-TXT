@@ -17,3 +17,6 @@ app/web/
 
 # branding.sh 的默认输出目录（CI 里输出到 RUNNER_TEMP，本地跑过别误提交）
 branding-out/
+
+# 本地 py_compile / import 过 patch_platform.py 会留下这个
+__pycache__/

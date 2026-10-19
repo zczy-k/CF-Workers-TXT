@@ -142,8 +142,11 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 | 下载全部 403 / 下到的是登录页 | 少带了 Cookie / UA / Referer | 确认站点是先从 App 内登录的（不是系统浏览器）；必要时在该站点设置里配 UA 或请求头 |
 | 某个按钮点了没反应 | 站点用了 `window.open`、`blob:` 或特殊协议 | 已在引擎回调里覆盖；仍有问题请附网址反馈 |
 | Windows 构建报找不到 `nuget` / 拉 WebView2 SDK 失败 | 插件在 CMake 阶段要拉 nuget 包 | 流水线已确保 nuget 可用；网络抖动重跑一次 |
+| Windows 编译插件报 `error C2338: static assertion failed: 'error STL1011'`（提到 `/await`、`<experimental/coroutine>`） | MSVC 14.51（VS 18）起把这些判成硬错误，而上游 `flutter_inappwebview_windows`（经 WebView2/WIL）还在用 | 流水线会往 `windows/CMakeLists.txt` 注入 `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`（微软报错里给的逃生宏）。哪天上游改用 C++20 coroutine 就能删掉 |
+| Android 构建报 `` `getDefaultProguardFile('proguard-android.txt')` is no longer supported `` | 上游 `flutter_inappwebview_android` 的 `build.gradle` 写法过旧，Flutter 模板自带的新 AGP 直接当硬错误 | 流水线会把它换成 `proguard-android-optimize.txt`（只改这一个文件；上游发版修好后该步自动跳过） |
+| Windows 步骤报 "Python was not found" / 只退 1 不给原因 | 机器上的 `python` 可能只是微软商店的"应用执行别名"占位符 | 流水线不是查 PATH 而是**实跑一遍**探测 `python` / `py -3` / `python3`，挑真能用的那个 |
 | CI 里 `dart analyze --no-fatal-infos` 报 "Cannot negate option" | Dart 3.13 起该选项已移除 | 别传它（本仓库的流水线已修正） |
-| 看不到 CI 日志 / 下不了产物 | 未登录 | 登录 GitHub 后看 Actions |
+| 看不到 CI 日志 / 下不了产物 | 未登录时拿不到 Actions 原始日志 | **失败原因无需登录**：流水线把各步骤日志尾部打成 check-run 注解，`GET /repos/zczy-k/CF-Workers-TXT/commits/<sha>/check-runs` → `.../check-runs/<id>/annotations` 即可读；产物要登录才能下 |
 
 ---
 
@@ -171,5 +174,5 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 | `shell/app/lib/src/state.dart` | 接线层：配置落盘、下载队列接引擎 Cookie/UA、blob 通道、密码安全存储 |
 | `shell/app/assets/preset.json` | 通用壳默认值；白标构建时被 CI 覆盖 |
 | `shell/tools/branding.sh` | 生成各平台图标 + `preset.json`（ImageMagick） |
-| `shell/tools/patch_platform.py` | 改 Android 清单 / Windows 窗口标题 |
+| `shell/tools/patch_platform.py` | 改 Android 清单 / Windows 窗口标题 / 给 Windows CMakeLists 注入 MSVC 静音宏 |
 | `.github/workflows/shell-build.yml` | `test-core → branding → android / windows` |
