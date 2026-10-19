@@ -93,6 +93,42 @@ class ShellState extends ChangeNotifier {
     super.dispose();
   }
 
+  /// 只给单测用的构造：绕开 path_provider / 安全存储这些平台插件。
+  ///
+  /// 为什么要留这么一个口子：这台机器上真的漏过一次"添加站点只建了档案、没有写进
+  /// 配置"，用户看到的是浏览页一句"这个站点已经被删除了"、首页永远空着。这类
+  /// "UI 流程忘了调某个函数"的 bug，`flutter analyze` 和纯 Dart 单测都抓不到，
+  /// 只有能把界面流程跑一遍的测试才抓得到 —— 见 `test/add_site_test.dart`。
+  /// 传入的 [icons] 可以换成不联网的替身，避免测试里真的发 HTTP 请求。
+  @visibleForTesting
+  static ShellState forTest({
+    required ShellConfig config,
+    required File configFile,
+    required File downloadsFile,
+    Branding branding = Branding.generic,
+    DownloadTransport? transport,
+    IconFetcher? icons,
+  }) {
+    late final ShellState state;
+    final DownloadManager downloads = DownloadManager(
+      transport: transport ?? FileDownloadTransport(),
+      maxConcurrent: config.maxConcurrentDownloads,
+      resolvePath: (DownloadTask task, String name) => state.resolveDownloadPath(name),
+      headers: (DownloadTask task) => state.downloadHeaders(task),
+    );
+    state = ShellState._(
+      branding: branding,
+      config: config,
+      configFile: ConfigFile(configFile),
+      downloads: downloads,
+      icons: icons ?? IconFetcher(Directory.systemTemp),
+      secure: const FlutterSecureStorage(),
+      downloadsFile: downloadsFile,
+    );
+    downloads.onChanged = (DownloadTask task) => state._onDownloadsChanged();
+    return state;
+  }
+
   // ------------------------------------------------------------------ 配置
 
   void saveSoon() {
@@ -115,10 +151,11 @@ class ShellState extends ChangeNotifier {
   }
 
   Future<void> addSite(SiteProfile site) async {
-    config.addSite(site);
+    final bool added = config.addSite(site);
     saveNow();
     notifyListeners();
-    unawaited(refreshIcon(site));
+    // 重复提交（同一个 id 已经在列表里）就不必再抓一次图标了
+    if (added) unawaited(refreshIcon(site));
   }
 
   void removeSite(String id) {

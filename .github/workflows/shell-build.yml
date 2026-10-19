@@ -238,6 +238,15 @@ jobs:
           set -o pipefail
           flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee "$RUNNER_TEMP/android-analyze.log"
 
+      # 组件测试：故意把"添加站点"这条界面流程真跑一遍。
+      # 起因是真事：添加站点只 new 了档案、忘了写进配置，浏览页按 id 查不到就说
+      # "这个站点已经被删除了"，首页列表永远空着（用户看到的"空壳"）。
+      # 这种"UI 流程忘了调某个函数"analyze 和纯 Dart 单测都抓不到，只测得到。
+      - name: App 组件测试（界面流程）
+        run: |
+          set -o pipefail
+          flutter test 2>&1 | tee "$RUNNER_TEMP/android-widget-test.log"
+
       # Flutter 模板的 release 默认用 debug keystore 签名，所以不配 Secrets 也能出
       # 一个可侧载安装的 APK。要正式签名请在 Secrets 里放 keystore 再改 build.gradle。
       - name: 构建 release APK

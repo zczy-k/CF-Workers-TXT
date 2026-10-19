@@ -59,7 +59,7 @@
 ┌──────────────────────────▼────────────────────────────────────┐
 │ 壳逻辑层 webshell_core（纯 Dart，零 Flutter / 零第三方依赖）      │
 │  站点档案 · 配置持久化 · URL 规整 · 请求头组装 · 下载队列/续传     │
-│  → 可 dart test，78 个用例                                        │
+│  → 可 dart test，80 个用例                                        │
 └──────────────────────────┬────────────────────────────────────┘
 ┌──────────────────────────▼────────────────────────────────────┐
 │ 引擎适配层（每个平台一份薄实现）                                 │
@@ -257,9 +257,10 @@ shell/
   README.md                    ← 使用说明 / 构建 / 白标输入 / 排错
   core/                        ← 纯 Dart：站点档案、配置、URL 规则、请求头、下载队列（dart test）
     lib/src/{models,config,url_utils,headers,download}.dart
-    test/                      ← 78 个用例
+    test/                      ← 80 个用例
   app/                         ← Flutter 壳 UI + 引擎适配（CI 现生成 android/windows 脚手架）
     assets/preset.json         ← 通用壳默认值；白标构建时被 CI 覆盖
+    test/                      ← 界面流程组件测试（flutter test）：添加站点等"点到即存"的流程
     lib/src/{state,paths,open,icons}.dart
     lib/src/engine/scripts.dart
     lib/src/pages/{home,browser,site_edit,downloads,settings}_page.dart
@@ -281,8 +282,9 @@ shell/
 
 | 阶段 | 内容 | 验收 | 现状 |
 | --- | --- | --- | --- |
-| **P1** | 纯 Dart 核心：站点档案、配置持久化、URL 规则、请求头组装、下载队列（含续传）+ 单测 | `dart test` 全绿 | ✅ 78 用例全绿，`dart analyze` 干净 |
+| **P1** | 纯 Dart 核心：站点档案、配置持久化、URL 规则、请求头组装、下载队列（含续传）+ 单测 | `dart test` 全绿 | ✅ 80 用例全绿，`dart analyze` 干净 |
 | **P2** | Flutter 壳 UI + 引擎适配：站点列表、添加站点、浏览页、前进后退、下载页、设置页 | 能装能跑，网页操作与浏览器一致 | ✅ `flutter analyze` 无 issue；CI 两端都出包（APK / Windows 便携包），产物已验（CJK App 名、包名、预置站点、图标都在包里）|
+| **P2.1** | App 组件测试（`shell/app/test/`，`flutter test`）：把"添加站点 → 写进配置 → 能被浏览页按 id 找到"这类界面流程真跑一遍 | 用例会红 | ✅ 3 用例全绿，CI 的 Android job 里跑；已验证：把修复注释掉用例立刻变红 |
 | **P3** | 桥接层补齐：下载三条路径、上传、外部协议、权限 | 下载能进手机/电脑本地，上传能选文件 | 🟡 已完成：三条下载路径 / 上传交引擎 / 外部协议 / 权限弹窗 / 按域名清 Cookie；未做：系统通知栏进度、每站点 profile 严格隔离、下载历史入库 |
 | **P4** | 白标 CI：`workflow_dispatch` 输入 + 图标生成 + 产物命名 | 输入名字/图标/网址 → 拿到专属 APP | ✅ 已跑通并验证：`app_name=万能壳白标测试` / `app_id=com.demo.whitelabel` / `preset_url=flutter.dev` 出的包，APK 与 zip 里的 `preset.json`、exe 名（`whitelabel.exe`）、五档图标都对；图标取自站点首页声明 |
 | **P5** | （按需）自写 Windows WebView2 宿主，补齐 §7 的四个 ❌；每站点 profile 严格隔离 | Windows 下载/上传与 Android 一致 | ⏳ 未开始（触发条件见 §7） |

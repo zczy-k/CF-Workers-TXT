@@ -78,9 +78,20 @@ class ShellConfig {
     return null;
   }
 
-  void addSite(SiteProfile site, {bool makeActive = true}) {
+  /// 加入站点。**按 id 去重**：同一个 id 已经在列表里就只把它设为"当前站点"，
+  /// 不再塞一份重复条目。返回 true 表示这次真的新增了。
+  ///
+  /// 为什么必须去重：UI 上"添加站点"是「表单 → 新建档案 → 写进配置 → 打开浏览页」，
+  /// 中间任何一次重试（用户连点、以后改成异步、或调用方忘了先查重）都会把同一个站点
+  /// 写两遍，列表里出现两个一模一样的条目。浏览页是按 id 找站点的，重了只会更难查。
+  bool addSite(SiteProfile site, {bool makeActive = true}) {
+    if (byId(site.id) != null) {
+      if (makeActive) activeSiteId = site.id;
+      return false;
+    }
     sites.add(site);
     if (makeActive || activeSiteId == null) activeSiteId = site.id;
+    return true;
   }
 
   /// 删除站点；如果删的是当前站点，自动切到第一个。

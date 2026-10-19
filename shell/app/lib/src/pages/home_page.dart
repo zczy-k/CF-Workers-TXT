@@ -67,6 +67,7 @@ class HomePage extends StatelessWidget {
     }
     final SiteProfile? site = await showAddSiteSheet(context, state);
     if (site == null || !context.mounted) return;
+    // 站点在表单里就已经写进配置了（见 showAddSiteSheet 的说明），这里只负责打开它。
     await Navigator.of(context).push<void>(BrowserPage.route(state, site.id));
   }
 }
@@ -290,6 +291,9 @@ class _SiteCard extends StatelessWidget {
 }
 
 /// 「添加站点」表单：只要一个地址，其余都能以后再改。
+///
+/// **返回的站点一定已经写进配置**（写盘这一步在表单内部完成，不交给调用方，
+/// 免得调用方忘了）。返回 null 表示用户取消。地址已经存在时返回已有的那个站点。
 Future<SiteProfile?> showAddSiteSheet(BuildContext context, ShellState state) {
   return showModalBottomSheet<SiteProfile>(
     context: context,
@@ -319,10 +323,19 @@ class _AddSiteSheetState extends State<_AddSiteSheet> {
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     final String? url = normalizeUrl(_url.text);
     if (url == null) {
       setState(() => _error = '这个地址打不开，检查一下是不是漏了域名或写错了协议');
+      return;
+    }
+    // 同一个地址已经加过了：别再塞一份，直接把已有的那个交回去（调用方会打开它）。
+    final SiteProfile? existing = widget.state.config.findByUrl(url);
+    if (existing != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('「${existing.displayName}」已经在列表里了，直接打开它')),
+      );
+      Navigator.of(context).pop(existing);
       return;
     }
     final String typedName = _name.text.trim();
@@ -333,6 +346,11 @@ class _AddSiteSheetState extends State<_AddSiteSheet> {
       themeColor: widget.state.branding.themeColor,
       createdAtMs: nowMs(),
     );
+    // 写进配置这一步**必须在这里**做，而不是交给调用方：调用方拿到的站点必须已经是
+    // 配置里的一员。否则浏览页按 id 找不到它，只会显示"这个站点已经被删除了"，
+    // 首页列表也永远空着 —— 就是"空壳"的表现（这台机器真的漏过一次）。
+    await widget.state.addSite(site);
+    if (!mounted) return;
     Navigator.of(context).pop(site);
   }
 
