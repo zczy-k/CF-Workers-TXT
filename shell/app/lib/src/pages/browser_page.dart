@@ -384,9 +384,9 @@ class _BrowserPageState extends State<BrowserPage> {
   /// 只有站点自己开了"信任自签证书"才放行，否则交回系统判断（默认拒绝）；
   /// 刻意不做全局忽略 —— 那等于把整个 App 的 HTTPS 安全一次性废掉。
   /// Windows（WebView2）不触发这个回调，证书校验由平台自己处理。
-  Future<ServerTrustAuthResponse> _onServerTrust(
+  Future<ServerTrustAuthResponse?> _onServerTrust(
     InAppWebViewController controller,
-    ServerTrustChallenge challenge,
+    URLAuthenticationChallenge challenge,
   ) async {
     final SiteProfile? site = _site;
     final bool allow = site != null && site.allowSelfSignedCert;

@@ -251,7 +251,7 @@ class ShellState extends ChangeNotifier {
       // Windows 等平台可能没实现，忽略；Cookie 已经清了
     }
     try {
-      await activeController?.clearAllCache();
+      await InAppWebViewController.clearAllCache();
     } catch (_) {
       // 没有打开的浏览页 / 平台没实现：拿不到 controller 就跳过
     }
