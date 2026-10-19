@@ -62,8 +62,11 @@ App 的主界面：
 
 1. `logo_path` 指定的仓库文件；
 2. `logo_url` 下载的图片；
-3. `auto_icon=true` 且给了 `preset_url`：抓站点自己的 `apple-touch-icon.png` / `apple-touch-icon-precomposed.png`
-   / `favicon.ico` / `favicon.png`；
+3. `auto_icon=true` 且给了 `preset_url`：先读首页 HTML 里 `<link rel="...icon...">` 声明的图标
+   （`apple-touch-icon` 优先 → 其他位图 → `svg` 放最后），拿不到再兜底试站点根目录的
+   `apple-touch-icon.png` / `apple-touch-icon-precomposed.png` / `favicon.ico` / `favicon.png`；
+   **顺序是刻意的**：现在多数站点不在固定路径放图标（`flutter.dev/favicon.ico` 是 404），
+   而写在 HTML 里的通常分辨率更高（`php.net` 声明了 196×196，根目录的 `favicon.ico` 只有 32×32）；
 4. 都没有：用 App 名（或域名）的首字母 + 主题色画一个。
 
 第 4 条是刻意的：**永远不会打出没有图标的包**。生成的是 Android 五档 `mipmap` + 自适应图标

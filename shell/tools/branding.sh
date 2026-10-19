@@ -9,7 +9,9 @@
 #   1) LOGO_PATH           仓库里的图片文件（例如 shell/branding/logo.png）
 #   2) LOGO_URL            一个图片地址（PNG / JPG / ICO 都行）
 #   3) AUTO_ICON=true 且给了 PRESET_URL
-#                          抓站点自己的 apple-touch-icon / favicon.ico / favicon.png
+#                          先读首页 HTML 里 <link rel="...icon..."> 声明的图标，
+#                          再兜底试站点根目录的 apple-touch-icon.png / favicon.ico / favicon.png
+#                          （现在多数站点只写在 HTML 里，固定路径上什么都没有）
 #   4) 都没有              用站点名/App 名的首字母画一个
 # 第 4 条是刻意的：永远有图标，绝不会打出"没有图标"的包。
 #
@@ -31,6 +33,10 @@ LOGO_URL="${LOGO_URL:-}"
 LOGO_PATH="${LOGO_PATH:-}"
 AUTO_ICON="${AUTO_ICON:-true}"
 ALLOW_ADD_SITE="${ALLOW_ADD_SITE:-true}"
+
+# 抓站点图标时用的 UA。写清楚自己是谁（而不是冒充 Chrome），同时带 compatible 前缀，
+# 让那些只拒绝"空 UA/爬虫 UA"的 CDN 放行；实测 flutter.dev / php.net / wikipedia 都能过。
+UA="Mozilla/5.0 (compatible; WebShellBranding/1.0; +https://github.com/zczy-k/CF-Workers-TXT)"
 
 if command -v magick >/dev/null 2>&1; then IM="magick"; elif command -v convert >/dev/null 2>&1; then IM="convert"; else
   # 实测：ubuntu-22.04 的镜像自带 ImageMagick，**ubuntu-24.04 起就没有了**，
@@ -82,6 +88,44 @@ APP_ID_EFFECTIVE="${ORG_PART}.${NAME_PART}"
 say "包名：$APP_ID_EFFECTIVE（组织 $ORG_PART / 名称 $NAME_PART）"
 
 # ---------------------------------------------------------------- 1) 找源图
+# 下面三个小工具只在 AUTO_ICON 那段用；放在这里是因为它们都要用 $WORK / $UA。
+#
+# 从首页 HTML 里挖 <link rel="...icon..."> 的 href（每行一个，保持文档顺序）。
+# 只做"够用"的解析：先按标签把 HTML 切成一行一个（正文里的 href 因此不会被误抓），
+# 再挑 rel 里带 icon / apple-touch 的 link，最后取 href。为什么要这么麻烦：实测
+# flutter.dev 的 /favicon.ico 是 404，图标只在 HTML 里写着一个带 hash 的 png。
+# rel 的值里允许有空格（"shortcut icon"），但**不能**跨过引号或尖括号——否则
+# rel="preload" href="/icons/x.png" 这类会被误当成图标。
+html_icon_hrefs() {
+  sed -E 's/></>\n</g' "$1" | tr -d '\r' \
+    | grep -iE '^[[:space:]]*<link[[:space:]]' \
+    | grep -iE 'rel=["'"'"']?[^"'"'"'>]*icon' \
+    | sed -nE 's/.*[Hh][Rr][Ee][Ff]=["'"'"']?([^"'"'"' >]+).*/\1/p'
+}
+
+# 把 href 补成绝对地址：绝对、协议相对、根相对、页内相对四种，够用了。
+# 依赖调用方先设好 ORIGIN（scheme://host）与 DIRPART（页面所在目录）。
+abs_url() {
+  case "$2" in
+    http://*|https://*) printf '%s\n' "$2" ;;
+    //*)                printf 'https:%s\n' "$2" ;;
+    /*)                 printf '%s%s\n' "$ORIGIN" "$2" ;;
+    *)                  printf '%s/%s\n' "$DIRPART" "$2" ;;
+  esac
+}
+
+# 下载一个候选图标。顺手挡掉"服务器把 404 页面当 200 返回"的情况：那种情况
+# curl 会成功、文件非空，但内容是 HTML，拿去切图标只会得到一个白块。
+try_download_icon() {
+  curl -fsSL --max-time 25 -A "$UA" "$1" -o "$WORK/logo-src" 2>/dev/null || return 1
+  [ -s "$WORK/logo-src" ] || return 1
+  if head -c 512 "$WORK/logo-src" | grep -qiE '<!doctype|<html|<head|<body'; then
+    say "候选返回的是网页不是图片，跳过：$1"
+    return 1
+  fi
+  return 0
+}
+
 SRC=""
 if [ -n "$LOGO_PATH" ] && [ -f "$LOGO_PATH" ]; then
   SRC="$LOGO_PATH"
@@ -105,13 +149,45 @@ if [ -z "$SRC" ] && [ "$AUTO_ICON" = "true" ] && [ -n "$PRESET_URL" ]; then
     *) BASE="https://$BASE" ;;
   esac
   ORIGIN="$(printf '%s' "$BASE" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://[^/]+).*#\1#')"
-  for cand in apple-touch-icon.png apple-touch-icon-precomposed.png favicon.ico favicon.png; do
-    if curl -fsSL --max-time 20 "$ORIGIN/$cand" -o "$WORK/logo-src" && [ -s "$WORK/logo-src" ]; then
-      SRC="$WORK/logo-src"
-      say "图标来源：站点文件 $ORIGIN/$cand"
-      break
-    fi
-  done
+  case "$BASE" in
+    *://*/*) DIRPART="${BASE%/*}" ;;   # 地址带路径：相对地址以它所在目录为基准
+    *)       DIRPART="$ORIGIN" ;;
+  esac
+
+  # 先读首页 HTML：站点在那里声明的图标通常分辨率最高（apple-touch-icon 一般 180+），
+  # 而且是唯一能拿到 flutter.dev 这类站点图标的办法（它的 /favicon.ico 是 404）。
+  if curl -fsSL --max-time 25 -A "$UA" "$BASE" -o "$WORK/page.html" 2>/dev/null && [ -s "$WORK/page.html" ]; then
+    say "读首页，找图标声明：$BASE"
+    HREFS="$(html_icon_hrefs "$WORK/page.html" || true)"
+    [ -n "$HREFS" ] || say "首页里没有 <link rel=...icon...> 声明"
+    # 分组试探，组内保持文档顺序：apple-touch-icon 一般分辨率最高 → 其他位图 → SVG
+    # （SVG 放最后：ImageMagick 不一定带 librsvg，切图失败的概率高）
+    AT="$(printf '%s\n' "$HREFS" | grep -i 'apple-touch' || true)"
+    RASTER="$(printf '%s\n' "$HREFS" | grep -vi 'apple-touch' | grep -viE '\.svg([?#]|$)' || true)"
+    VECTOR="$(printf '%s\n' "$HREFS" | grep -vi 'apple-touch' | grep -iE '\.svg([?#]|$)' || true)"
+    for href in $AT $RASTER $VECTOR; do
+      URL="$(abs_url "$BASE" "$href")"
+      if try_download_icon "$URL"; then
+        SRC="$WORK/logo-src"
+        say "图标来源：首页声明 $URL"
+        break
+      fi
+    done
+  else
+    say "首页打不开（网络或反爬），只试固定路径"
+  fi
+
+  # 兜底：老站点确实会在根目录放这几个文件（一次小下载就能拿到，不需要读 HTML）。
+  if [ -z "$SRC" ]; then
+    for cand in apple-touch-icon.png apple-touch-icon-precomposed.png favicon.ico favicon.png; do
+      if try_download_icon "$ORIGIN/$cand"; then
+        SRC="$WORK/logo-src"
+        say "图标来源：站点文件 $ORIGIN/$cand"
+        break
+      fi
+    done
+  fi
+
   [ -n "$SRC" ] || say "站点没有可用的图标文件"
 fi
 
