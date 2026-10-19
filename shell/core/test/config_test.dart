@@ -109,6 +109,32 @@ void main() {
       expect(c.findByUrl('不是地址'), isNull);
     });
 
+    test('同一个 id 重复 addSite 不会产生重复条目（只切当前站点）', () {
+      final ShellConfig c = ShellConfig();
+      final SiteProfile s = _site('a', 'https://a.com');
+      expect(c.addSite(s), isTrue);
+      expect(c.addSite(s), isFalse);
+      expect(c.addSite(_site('a', 'https://a.com')), isFalse);
+      expect(c.sites, hasLength(1));
+      expect(c.activeSiteId, 'a');
+    });
+
+    test('带路径的地址也能当站点（例：note.istudy.qzz.io/note1）', () {
+      final ShellConfig c = ShellConfig();
+      final SiteProfile s = SiteProfile(
+        id: newId(),
+        name: guessSiteName('https://note.istudy.qzz.io/note1'),
+        startUrl: normalizeUrl('note.istudy.qzz.io/note1')!,
+        createdAtMs: nowMs(),
+      );
+      c.addSite(s);
+      expect(s.startUrl, 'https://note.istudy.qzz.io/note1');
+      expect(s.name, 'note.istudy.qzz.io');
+      expect(c.byId(s.id), same(s));
+      // 用户再粘一次同样的地址，能找到已有的那个（用来提示"已经加过了"）
+      expect(c.findByUrl('https://note.istudy.qzz.io/note1')?.id, s.id);
+    });
+
     test('touch 会更新当前站点', () {
       final ShellConfig c = ShellConfig(sites: <SiteProfile>[
         _site('a', 'https://a.com'),

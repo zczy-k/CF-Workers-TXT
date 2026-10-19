@@ -68,9 +68,38 @@ class _BrowserPageState extends State<BrowserPage> {
   Widget build(BuildContext context) {
     final SiteProfile? site = _site;
     if (site == null) {
+      // 正常不会走到这里（站点在"添加"时就写进配置了）。真走到这里说明站点已被删除，
+      // 或者哪个调用方拿着一个不在配置里的 id 进来了 —— 别让用户对着空白页猜。
       return Scaffold(
         appBar: AppBar(),
-        body: const Center(child: Text('这个站点已经被删除了')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  Icons.link_off,
+                  size: 48,
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+                const SizedBox(height: 12),
+                const Text('这个站点已经不在了'),
+                const SizedBox(height: 6),
+                Text(
+                  '它可能已经被删除。返回上一页重新添加即可，已经下载到本机的文件不受影响。',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  child: const Text('返回'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 

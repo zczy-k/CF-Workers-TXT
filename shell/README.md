@@ -86,12 +86,15 @@ CI 打的是 **debug keystore 签名**的 release 包，能侧载安装、能正
 ## 三、本机开发
 
 ```bash
-# 纯逻辑（秒级，78 个用例）
+# 纯逻辑（秒级，80 个用例）
 cd shell/core && dart pub get && dart test
 
 # 壳 App（需要 Flutter 3.44+）
 cd shell/app && flutter pub get
 flutter run -d windows      # 或 -d <安卓设备>
+
+# 界面流程测试（3 个用例，几秒钟，不需要设备；不联网）
+cd shell/app && flutter test
 ```
 
 注意两点：
@@ -102,6 +105,10 @@ flutter run -d windows      # 或 -d <安卓设备>
 - **静态分析的 flag 不一样**：`dart analyze` 从 Dart 3.13 起**不能**传 `--no-fatal-infos`（传了直接退出 64），
   而 `flutter analyze` 默认把 info 也算致命，必须传 `--no-fatal-infos --no-fatal-warnings`。
   两边 CI 都按这个写了，本地跟着来就不会被"假报错"骗。
+- **改 UI 流程就顺手跑一下 `flutter test`**：`shell/app/test/` 里的用例会把"添加站点"这类
+  流程真的点一遍。原因是有一次真漏过 —— 添加站点只建了档案、忘了写进配置，浏览页按 id
+  查不到它，只显示"这个站点已经被删除了"，首页列表永远空着（用户看到的"空壳"）。
+  这种"界面流程忘了调某个函数"的问题 `analyze` 和纯 Dart 单测都看不见，只有组件测试抓得到。
 
 Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带；没有的话装一次
 [Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)）。
@@ -171,7 +178,8 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 
 | 路径 | 作用 |
 | --- | --- |
-| `shell/core/` | 纯 Dart 核心（站点档案、配置持久化、URL 规则、请求头、下载队列），`dart test` 78 用例 |
+| `shell/core/` | 纯 Dart 核心（站点档案、配置持久化、URL 规则、请求头、下载队列），`dart test` 80 用例 |
+| `shell/app/test/` | 界面流程组件测试（`flutter test`）：添加站点等"点到即存"的流程，抓 analyze 看不见的 bug |
 | `shell/app/lib/src/pages/` | 首页 / 浏览页 / 站点设置 / 下载 / 设置 |
 | `shell/app/lib/src/engine/scripts.dart` | 注入脚本（blob 导出、补请求头、长按、全屏兜底） |
 | `shell/app/lib/src/state.dart` | 接线层：配置落盘、下载队列接引擎 Cookie/UA、blob 通道、密码安全存储 |
