@@ -261,18 +261,21 @@ class _SiteEditPageState extends State<SiteEditPage> {
                   ),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: OutlinedButton.icon(
-                  onPressed: _busy ? null : _delete,
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('删除这个站点'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: colors.error,
-                    minimumSize: const Size.fromHeight(46),
+              // 单站点直达模式：这是用户唯一的站点，删掉就成了死胡同
+              // （列表进不去、也加不了新站），干脆不给删。
+              if (!widget.state.branding.singleSiteMode)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _delete,
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('删除这个站点'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colors.error,
+                      minimumSize: const Size.fromHeight(46),
+                    ),
                   ),
                 ),
-              ),
             ]),
           ],
         ),

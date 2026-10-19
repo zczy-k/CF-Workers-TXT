@@ -35,6 +35,32 @@ void main() {
       expect(b.appName, 'WebShell');
       expect(b.isWhiteLabel, isFalse);
     });
+
+    test('singleSiteMode：白标且禁止加站才成立', () {
+      // 通用壳：列表首屏
+      expect(Branding.generic.singleSiteMode, isFalse);
+      // 通用壳就算禁止加站也不是直达模式（没有预置站点可直达）
+      expect(const Branding(allowAddSite: false).singleSiteMode, isFalse);
+      // 白标 + 允许加站：列表首屏，方便用户加自己的站
+      expect(
+        const Branding(presetUrl: 'oa.example.com').singleSiteMode,
+        isFalse,
+      );
+      // 白标 + 禁止加站：直达模式
+      expect(
+        const Branding(presetUrl: 'oa.example.com', allowAddSite: false)
+            .singleSiteMode,
+        isTrue,
+      );
+      // preset.json 里的字段解析过来同样成立
+      expect(
+        Branding.fromJson(const <String, dynamic>{
+          'presetUrl': 'oa.example.com',
+          'allowAddSite': false,
+        }).singleSiteMode,
+        isTrue,
+      );
+    });
   });
 
   group('bootstrap', () {

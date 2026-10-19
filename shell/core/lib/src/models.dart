@@ -349,6 +349,10 @@ class Branding {
 
   bool get isWhiteLabel => (presetUrl ?? '').trim().isNotEmpty;
 
+  /// 白标 + 禁止加站 = 单站点直达模式：启动直接进站点内容页，不显示站点列表。
+  /// 只要还允许加站（或根本不是白标），就维持列表首屏，方便用户管理自己的站点。
+  bool get singleSiteMode => isWhiteLabel && !allowAddSite;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
         'appName': appName,
         'themeColor': themeColor,
