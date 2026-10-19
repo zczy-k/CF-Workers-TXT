@@ -62,7 +62,10 @@ class ShellState extends ChangeNotifier {
     final ShellConfig config = configFile.load(branding);
 
     if (config.downloadDir == null || config.downloadDir!.isEmpty) {
-      config.downloadDir = await defaultDownloadDirectory();
+      // 首次启动：探测默认下载目录（Android 是公共 Download/<App 名文件夹>，
+      // 中文名取拼音首字母，如「成都」→ Download/cd），结果写进配置，
+      // 下载时不再反复探测。
+      config.downloadDir = await defaultDownloadDirectory(branding.appName);
       configFile.save(config);
     } else if (Platform.isAndroid) {
       // 升级迁移：老版本的 Android 落点是 Android/data/<包名>/files/Download，

@@ -723,6 +723,18 @@ String? androidMediaDirOf(String appPrivatePath) {
   return '${appPrivatePath.substring(0, at)}/Android/media/$pkg';
 }
 
+/// Android：`/…/Android/data/<包名>/files` → `/…`（卷根，通常是
+/// `/storage/emulated/0`）。用于定位系统公共 `Download` 目录。
+///
+/// 传入路径不是 Android 应用私有目录的形状时返回 null（调用方自己兜底）。
+String? androidVolumeRootOf(String appPrivatePath) {
+  const String marker = '/Android/data/';
+  final int at = appPrivatePath.indexOf(marker);
+  if (at < 0) return null;
+  final String root = appPrivatePath.substring(0, at);
+  return root.isEmpty ? null : root;
+}
+
 /// 已有同名文件时补 ` (1)`、` (2)`。
 String uniquePath(String path, {bool Function(String path)? exists}) {
   final bool Function(String p) test = exists ?? (String p) => File(p).existsSync();
