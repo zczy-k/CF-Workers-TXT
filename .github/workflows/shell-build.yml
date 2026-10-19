@@ -205,6 +205,32 @@ jobs:
           set -o pipefail
           flutter pub get 2>&1 | tee "$RUNNER_TEMP/android-pub.log"
 
+      # 上游坑：flutter_inappwebview_android 1.1.3 的 android/build.gradle 给
+      # release buildType 用了 getDefaultProguardFile('proguard-android.txt')，
+      # 而 Flutter 3.47 模板自带的 AGP 已把这个写法当成硬错误（构建直接失败）。
+      # 目前 1.1.3 是最新 stable（1.2.0 只有 beta），所以只针对这一个文件把文件名
+      # 换成 AGP 要求的 proguard-android-optimize.txt：语义上只是让 R8 能优化，
+      # 对没开 minify 的构建没有任何实际影响。
+      # 上游修好后下面的 grep 匹配不到，这一步会自动跳过（不会因此失败）。
+      - name: 补丁：上游插件的 proguard 文件名
+        run: |
+          set -o pipefail
+          {
+            PUB="${PUB_CACHE:-$HOME/.pub-cache}"
+            found=0
+            for f in "$PUB"/hosted/pub.dev/flutter_inappwebview_android-*/android/build.gradle; do
+              [ -f "$f" ] || continue
+              if grep -q 'proguard-android\.txt' "$f"; then
+                sed -i 's/proguard-android\.txt/proguard-android-optimize.txt/g' "$f"
+                echo "已补丁：$f"
+                found=1
+              fi
+            done
+            if [ "$found" = 0 ]; then
+              echo "提示：没有需要补丁的 flutter_inappwebview_android（上游可能已修）"
+            fi
+          } 2>&1 | tee "$RUNNER_TEMP/patch-proguard.log"
+
       - name: 静态分析（只把 error 当失败）
         # 与 core 的 `dart analyze` 相反：flutter analyze 默认把 info 也算致命
         # （本地 3.47.7 实测：只报 info 也会退 1），所以这里必须显式带 --no-fatal-infos。
@@ -304,18 +330,78 @@ jobs:
       - name: 换成白标图标、窗口标题与预置配置
         shell: pwsh
         run: |
-          Copy-Item "$env:RUNNER_TEMP\branding\app_icon.ico" "windows\runner\resources\app_icon.ico" -Force
-          Copy-Item "$env:RUNNER_TEMP\branding\preset.json" "assets\preset.json" -Force
-          python "$env:GITHUB_WORKSPACE\shell\tools\patch_platform.py" windows "windows" "$env:APP_NAME_EFFECTIVE"
+          # Continue + 显式 -ErrorAction Stop：既不让原生命令的 stderr 变成终止错误
+          # （pwsh 7.4+ 的坑），又让 Copy-Item 真失败时确实失败。
+          # 整段包在 try/finally 里：无论成功失败，日志都会落到文件，失败注解才拿得到文本。
+          $ErrorActionPreference = 'Continue'
+          $log = "$env:RUNNER_TEMP\patch-windows.log"
+          $lines = New-Object System.Collections.Generic.List[string]
+          $fail = 0
+          try {
+            $script = "$env:GITHUB_WORKSPACE\shell\tools\patch_platform.py"
+            $lines.Add("APP_NAME_EFFECTIVE=$env:APP_NAME_EFFECTIVE  APP_ID_EFFECTIVE=$env:APP_ID_EFFECTIVE")
+
+            Copy-Item "$env:RUNNER_TEMP\branding\app_icon.ico" "windows\runner\resources\app_icon.ico" -Force -ErrorAction Stop
+            Copy-Item "$env:RUNNER_TEMP\branding\preset.json" "assets\preset.json" -Force -ErrorAction Stop
+
+            # runner 上 python / py / python3 到底哪个能用不一定，而且必须**真跑一次**才算数：
+            # Windows 上 python.exe 可能只是商店"应用执行别名"占位符，存在但一跑就报
+            # "Python was not found" 然后退出 1（本机就是这样，CI 上也可能）。
+            $cands = @(
+              @{ exe = 'python';  pre = @() },
+              @{ exe = 'py';      pre = @('-3') },
+              @{ exe = 'python3'; pre = @() }
+            )
+            $chosen = $null
+            foreach ($c in $cands) {
+              if (-not (Get-Command $c.exe -ErrorAction SilentlyContinue)) { continue }
+              $pre = $c.pre
+              $probe = @($pre) + @('-c', 'import sys;print(sys.version)')
+              & $c.exe @probe *> $null
+              if ($LASTEXITCODE -eq 0) { $chosen = $c; break }
+              $lines.Add("$($c.exe) 不可用（退出码 $LASTEXITCODE），换下一个")
+            }
+            if ($null -eq $chosen) {
+              $lines.Add("错误：runner 上找不到可用的 python（试过 python / py -3 / python3）")
+              $fail = 1
+            } else {
+              $pre = $chosen.pre
+              $lines.Add("用的 python：$($chosen.exe) $($pre -join ' ')")
+              $argv = @($pre) + @($script, 'windows', 'windows', "$env:APP_NAME_EFFECTIVE")
+              $lines.Add((& $chosen.exe @argv 2>&1 | Out-String))
+              $code = $LASTEXITCODE
+              if ($null -eq $code) { $code = 0 }
+              $lines.Add("patch_platform.py 退出码：$code")
+              if ($code -ne 0) { $fail = $code }
+            }
+          } catch {
+            $fail = 1
+            $lines.Add("异常：" + $_.Exception.Message)
+          } finally {
+            $lines | Tee-Object -FilePath $log
+          }
+          if ($fail -ne 0) { exit $fail }
 
       - name: pub get
-        run: flutter pub get
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          flutter pub get 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\windows-pub.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 静态分析（只把 error 当失败）
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\windows-analyze.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 构建 release
-        run: flutter build windows --release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          flutter build windows --release 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\windows-build.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # 只拷 exe 是不够的：同目录的 flutter_windows.dll 与 data/ 缺一不可，
       # 所以压的是整个 Release 目录，解压即用。
@@ -337,18 +423,22 @@ jobs:
 
       # 同 Android job 里的说明：原始日志要登录才能看，注解免登录可读，
       # 所以失败时把诊断日志尾部打成注解。
-      # 这里不去 tee 各个步骤：pwsh 7.4+ 把原生命令的 stderr 当错误处理，
-      # 加 2>&1 | Tee-Object 反而可能把正常警告变成失败，不值得。
+      # 上面几个步骤都做了 tee（先 $ErrorActionPreference='Continue' 再用
+      # 2>&1 | Tee-Object，最后显式 exit $LASTEXITCODE）：这样既不会因为 pwsh 7.4+
+      # 把原生命令 stderr 当错误而假失败，又能让真失败带上完整报错文本。
       - name: 失败原因（免登录可读）
         if: failure()
         shell: pwsh
         run: |
           $cands = @()
           $cands += Get-ChildItem "$env:RUNNER_TEMP\*.log" -ErrorAction SilentlyContinue
-          $cands += Get-ChildItem "$(Split-Path $env:RUNNER_TEMP -Parent)\_diag\Worker_*.log" -ErrorAction SilentlyContinue
+          $cands += Get-ChildItem "$(Split-Path $env:RUNNER_TEMP -Parent)\_diag\*.log" -ErrorAction SilentlyContinue
           $files = $cands | Sort-Object LastWriteTime -Descending | Select-Object -First 3
           if (-not $files) {
-            Write-Host "::error title=Windows 构建失败::没找到日志文件，请登录 GitHub 查看"
+            # 连日志都没找到时，把诊断目录里到底有什么打出来，别只说"请登录查看"
+            $where = "$(Split-Path $env:RUNNER_TEMP -Parent)\_diag"
+            $hint = (Get-ChildItem $where -ErrorAction SilentlyContinue | Select-Object -First 12 -ExpandProperty Name) -join ", "
+            Write-Host "::error title=Windows 构建失败::没找到日志文件（$where 下有：$hint）"
             return
           }
           foreach ($f in $files) {
