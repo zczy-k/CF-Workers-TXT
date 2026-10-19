@@ -216,16 +216,33 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 | `theme_color` | 主色 `#RRGGBB`（顶栏、图标底色、assets 里的 `themeColor`） |
 | `logo_url` | ② 给一个图片 URL，CI 下载后做图标（PNG/JPG/ICO 都行） |
 | `logo_path` | ① 仓库里放好文件（如 `shell/branding/logo.png`），CI 直接读 |
-| `auto_icon` | ③ 都没给就从预置站点抓 `apple-touch-icon*` / `favicon.ico` / `favicon.png` |
+| `auto_icon` | ③ 都没给就从预置站点抓图标：先读首页 HTML 里 `<link rel="...icon...">` 声明的（apple-touch 优先，svg 放最后），再兜底试根目录的 `apple-touch-icon*` / `favicon.ico` / `favicon.png` |
 | `allow_add_site` | 白标版是否允许用户再加站点（默认允许） |
 
 **三条路都没结果时不会打出"没有图标"的包**：用 App 名/域名的首字母按主题色画一个
 （`shell/tools/branding.sh`，之所以取 ASCII 字母是因为 CI 上不保证有中文字体，画汉字会变方框）。
 
-图标生成**不引第三方依赖**：ubuntu runner 自带 ImageMagick，`branding.sh` 用它切出
-Android 五档 `mipmap-*/ic_launcher.png` + 自适应图标（前景按 2/3 缩进安全区）+ 多尺寸
-Windows `.ico`；`patch_platform.py` 负责改 Android 清单（INTERNET 权限、允许明文、
-`android:label`）和 Windows 的窗口标题（中文转 `\uXXXX` 转义，源码保持纯 ASCII）。
+**为什么必须读 HTML 而不能只探固定路径**：实测 `flutter.dev/favicon.ico` 是 404，它的图标只在
+首页 HTML 里声明（还带 hash）；`php.net` 在 HTML 里声明了 196×196，而根目录 `favicon.ico` 只有
+32×32。只探固定路径等于对现在的多数站点直接退化到首字母图标。
+
+图标生成**不引第三方依赖**：`branding.sh` 用 ImageMagick 切出 Android 五档
+`mipmap-*/ic_launcher.png` + 自适应图标（前景按 2/3 缩进安全区）+ 多尺寸 Windows `.ico`。
+注意 **ubuntu-24.04 起镜像不再自带 ImageMagick**（22.04 还自带），所以 CI 里 apt 装一次。
+`patch_platform.py` 负责改 Android 清单（INTERNET 权限、允许明文、`android:label`）、Windows
+的窗口标题（中文转 `\uXXXX` 转义，源码保持纯 ASCII），以及往 `windows/CMakeLists.txt` 注入
+一个 MSVC 静音宏（见下）。
+
+**CI 里打的两个上游补丁**（都不是我们的 bug，但会挡住构建，所以固定做法写在这里）：
+
+| 症状 | 上游问题 | 我们的做法 |
+| --- | --- | --- |
+| Android 构建报 ``getDefaultProguardFile('proguard-android.txt')` is no longer supported`` | `flutter_inappwebview_android 1.1.3` 的 `build.gradle` 写法旧，新 AGP 判成硬错误；上游还没发新版 | 构建前只改这一个文件，换成 `proguard-android-optimize.txt`（上游修好后不匹配、自动跳过） |
+| Windows 编译报 `error C2338 / STL1011: /await ... deprecated` | MSVC 14.51（VS 18）起 `<experimental/coroutine>` 是硬错误，`flutter_inappwebview_windows`（经 WebView2/WIL）还在用 | 往应用自己的 `windows/CMakeLists.txt` 注入 `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`（微软报错信息里给的逃生宏） |
+
+**CI 失败必须可诊断**：Actions 原始日志要登录才能看，所以每个 job 末尾都有一个"失败原因"步骤，
+把各步骤日志尾部打成 `::error::` **注解**；公开仓库里 `GET /repos/<owner>/<repo>/commits/<sha>/check-runs`
+→ `.../check-runs/<id>/annotations` 免登录就能读到，排错不用登录（本仓库前几轮的失败都是这样定位的）。
 
 Android `minSdk` 用 Flutter 模板默认的 **24**，正好等于本套插件里要求最高的那个
 （`flutter_secure_storage 11` / `flutter_file_dialog` / `url_launcher_android`），所以不必改。
@@ -265,9 +282,9 @@ shell/
 | 阶段 | 内容 | 验收 | 现状 |
 | --- | --- | --- | --- |
 | **P1** | 纯 Dart 核心：站点档案、配置持久化、URL 规则、请求头组装、下载队列（含续传）+ 单测 | `dart test` 全绿 | ✅ 78 用例全绿，`dart analyze` 干净 |
-| **P2** | Flutter 壳 UI + 引擎适配：站点列表、添加站点、浏览页、前进后退、下载页、设置页 | 能装能跑，网页操作与浏览器一致 | ✅ 代码完成；`flutter analyze` 无 issue，真机/构建待 CI 验证 |
+| **P2** | Flutter 壳 UI + 引擎适配：站点列表、添加站点、浏览页、前进后退、下载页、设置页 | 能装能跑，网页操作与浏览器一致 | ✅ `flutter analyze` 无 issue；CI 两端都出包（APK / Windows 便携包），产物已验（CJK App 名、包名、预置站点、图标都在包里）|
 | **P3** | 桥接层补齐：下载三条路径、上传、外部协议、权限 | 下载能进手机/电脑本地，上传能选文件 | 🟡 已完成：三条下载路径 / 上传交引擎 / 外部协议 / 权限弹窗 / 按域名清 Cookie；未做：系统通知栏进度、每站点 profile 严格隔离、下载历史入库 |
-| **P4** | 白标 CI：`workflow_dispatch` 输入 + 图标生成 + 产物命名 | 输入名字/图标/网址 → 拿到专属 APP | 🟡 代码完成，等 CI 跑通 |
+| **P4** | 白标 CI：`workflow_dispatch` 输入 + 图标生成 + 产物命名 | 输入名字/图标/网址 → 拿到专属 APP | ✅ 已跑通并验证：`app_name=万能壳白标测试` / `app_id=com.demo.whitelabel` / `preset_url=flutter.dev` 出的包，APK 与 zip 里的 `preset.json`、exe 名（`whitelabel.exe`）、五档图标都对；图标取自站点首页声明 |
 | **P5** | （按需）自写 Windows WebView2 宿主，补齐 §7 的四个 ❌；每站点 profile 严格隔离 | Windows 下载/上传与 Android 一致 | ⏳ 未开始（触发条件见 §7） |
 
 ---

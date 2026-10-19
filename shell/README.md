@@ -176,6 +176,6 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 | `shell/app/lib/src/engine/scripts.dart` | 注入脚本（blob 导出、补请求头、长按、全屏兜底） |
 | `shell/app/lib/src/state.dart` | 接线层：配置落盘、下载队列接引擎 Cookie/UA、blob 通道、密码安全存储 |
 | `shell/app/assets/preset.json` | 通用壳默认值；白标构建时被 CI 覆盖 |
-| `shell/tools/branding.sh` | 生成各平台图标 + `preset.json`（ImageMagick） |
+| `shell/tools/branding.sh` | 生成各平台图标 + `preset.json`（ImageMagick；图标优先取站点首页 HTML 里声明的） |
 | `shell/tools/patch_platform.py` | 改 Android 清单 / Windows 窗口标题 / 给 Windows CMakeLists 注入 MSVC 静音宏 |
 | `.github/workflows/shell-build.yml` | `test-core → branding → android / windows` |
