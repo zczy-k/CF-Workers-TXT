@@ -44,10 +44,11 @@ jobs:
 
       - run: dart pub get
 
-      # 本地已用 Flutter 3.47.7 的 dart analyze + dart test 全绿校验过，所以这里恢复成硬门禁：
-      # error 才失败，info/warning 只打印（避免 Flutter 版本升级带来的风格提示把构建卡死）。
+      # 注意：**不要**加 --no-fatal-infos —— Dart 3.13 起这个选项已被移除（传了会以
+      # "Cannot negate option" 直接退出 64，看着像代码错，其实是用法错）。
+      # 现在 info 本来就不致命，只保留 --no-fatal-warnings 就等价于"只有 error 才失败"。
       - name: 静态分析（只把 error 当失败）
-        run: dart analyze --no-fatal-infos --no-fatal-warnings
+        run: dart analyze --no-fatal-warnings
 
       - name: 单元测试
         run: dart test -r expanded
@@ -114,7 +115,7 @@ jobs:
 
       - name: 静态分析（只把 error 当失败）
         working-directory: client/app
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        run: flutter analyze --no-fatal-warnings
 
       # 说明：Flutter 模板的 release 默认用 **debug keystore** 签名，所以不配 Secrets
       # 也能产出一个可侧载安装的 APK。想换成正式签名，就在仓库 Secrets 里放
@@ -168,7 +169,7 @@ jobs:
         run: flutter pub get
 
       - name: 静态分析（只把 error 当失败）
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        run: flutter analyze --no-fatal-warnings
 
       - name: 构建 release
         run: flutter build windows --release
