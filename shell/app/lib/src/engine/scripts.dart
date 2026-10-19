@@ -6,12 +6,30 @@ import 'package:webshell_core/webshell_core.dart';
 ///
 /// 这一层是"全功能"的关键，它补的正是"网页转 APP"工具缺掉的东西：
 ///   1. `blob:` / `data:` 文件（前端生成的文件）——原生下载事件拦不到这一类；
-///   2. 站点自定义请求头 —— WebView 平台不让你改页面内部请求的头，只能在 JS 层补；
-///   3. 长按链接 → 原生菜单（下载 / 复制 / 用系统浏览器打开）；
-///   4. Windows 上 WebView2 不给全屏事件，这里用 JS 兜底。
-String buildBridgeScript(SiteProfile site) {
-  final String headers = jsonEncode(site.headers);
-  return _template.replaceFirst('__WS_HEADERS__', headers);
+///   2. **下载意图拦截** —— Windows 上 WebView2 的下载事件根本没接到原生
+///      （见 ARCHITECTURE §7），不在这里接管的话，文件会绕过我们的下载器，
+///      下载列表里什么都不显示、用户也找不到文件；
+///   3. 站点自定义请求头 —— WebView 平台不让你改页面内部请求的头，只能在 JS 层补；
+///   4. 长按链接 → 原生菜单（下载 / 复制 / 用系统浏览器打开）；
+///   5. Windows 上 WebView2 不给全屏事件，这里用 JS 兜底。
+///
+/// [guessDownloadsByExtension]：链接扩展名像文件（`.zip`/`.pdf`/…）时就当下载
+/// 接管。Android 不开这个 —— 那边原生 `onDownloadStartRequest` 会准确告诉你
+/// "服务器回的是附件"，而按扩展名猜会把"点开看图/看视频"也变成下载。
+String buildBridgeScript(
+  SiteProfile site, {
+  bool guessDownloadsByExtension = false,
+}) {
+  return _template
+      .replaceFirst('__WS_HEADERS__', jsonEncode(site.headers))
+      .replaceFirst(
+        '__WS_EXTENSIONS__',
+        jsonEncode(kDownloadExtensions.toList()..sort()),
+      )
+      .replaceFirst(
+        '__WS_GUESS_DOWNLOADS__',
+        guessDownloadsByExtension ? 'true' : 'false',
+      );
 }
 
 const String _template = r'''
@@ -20,6 +38,8 @@ const String _template = r'''
   window.__wsInstalled = true;
 
   var EXTRA_HEADERS = __WS_HEADERS__;
+  var GUESS_DOWNLOADS = __WS_GUESS_DOWNLOADS__;
+  var DOWNLOAD_EXTS = __WS_EXTENSIONS__;
 
   function post(name, payload) {
     try {
@@ -27,6 +47,26 @@ const String _template = r'''
         window.flutter_inappwebview.callHandler(name, payload);
       }
     } catch (e) { }
+  }
+
+  function absolute(href) {
+    try { return new URL(href, document.baseURI).href; } catch (e) { return href; }
+  }
+
+  // 这个链接是不是"要点下载"？只认两类，避免把普通链接变成下载：
+  //   * 页面自己标了 download 属性；
+  //   * （Windows 上）地址末段的扩展名像文件。
+  function wantsDownload(el, href) {
+    if (!href) { return false; }
+    if (el.hasAttribute('download')) { return true; }
+    if (!GUESS_DOWNLOADS) { return false; }
+    var u;
+    try { u = new URL(href, document.baseURI); } catch (e) { return false; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') { return false; }
+    var path = u.pathname.toLowerCase();
+    var dot = path.lastIndexOf('.');
+    if (dot < 0) { return u.search.toLowerCase().indexOf('download') >= 0; }
+    return DOWNLOAD_EXTS.indexOf(path.substring(dot + 1)) >= 0;
   }
 
   // ---- 1) 给页面自己的 fetch / XHR 补上站点自定义请求头 ---------------------
@@ -85,9 +125,10 @@ const String _template = r'''
     }
   } catch (e) { }
 
-  // ---- 2) blob:/data: 导出 -------------------------------------------------
-  // 这两类不走网络层，原生下载事件拦不到，所以在这里把字节分片读出交给原生落盘。
+  // ---- 2) 下载接管：blob:/data: 与"点了就是要下载"的链接 -------------------
+  // blob:/data: 不走网络层，原生下载事件拦不到，所以在这里把字节分片读出交给原生落盘。
   // 分片读是为了大文件不会一次性把内存打爆。
+  // 普通链接则按 wantsDownload() 判断：a[download] 两端都认，扩展名像文件只在 Windows 认。
   var CHUNK = 256 * 1024;
 
   function sendBlob(url, name) {
@@ -129,13 +170,26 @@ const String _template = r'''
       e.preventDefault();
       e.stopPropagation();
       sendBlob(href, el.getAttribute('download') || 'download');
+      return;
     }
+    if (!wantsDownload(el, href)) { return; }
+    // 接管下载：不让引擎自己去下（Windows 上它下完既不入列表也不告诉你存在哪）
+    e.preventDefault();
+    e.stopPropagation();
+    post('downloadRequest', {
+      url: el.href || absolute(href),
+      name: el.getAttribute('download') || ''
+    });
   }, true);
 
   var origWindowOpen = window.open;
   window.open = function (u, n, f) {
     if (typeof u === 'string' && (u.indexOf('blob:') === 0 || u.indexOf('data:') === 0)) {
       sendBlob(u, 'download');
+      return null;
+    }
+    if (typeof u === 'string' && GUESS_DOWNLOADS && wantsDownload({ hasAttribute: function () { return false; } }, u)) {
+      post('downloadRequest', { url: absolute(u), name: '' });
       return null;
     }
     return origWindowOpen.apply(window, arguments);

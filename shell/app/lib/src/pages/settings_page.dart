@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:webshell_core/webshell_core.dart';
 
+import '../open.dart';
 import '../state.dart';
 import 'site_edit_page.dart' show copyText;
 
@@ -53,11 +54,27 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           ListTile(
             title: const Text('下载位置'),
-            subtitle: Text(config.downloadDir ?? '（默认）'),
-            trailing: IconButton(
-              tooltip: '复制路径',
-              icon: const Icon(Icons.copy),
-              onPressed: () => copyText(context, config.downloadDir ?? ''),
+            subtitle: Text(state.downloadDirectoryLabel),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (!Platform.isAndroid)
+                  IconButton(
+                    tooltip: '打开文件夹',
+                    icon: const Icon(Icons.folder_open),
+                    onPressed: () async {
+                      final String? error =
+                          await openDirectory(state.downloadDirectoryLabel);
+                      if (error != null) _snack(error);
+                    },
+                  ),
+                IconButton(
+                  tooltip: '复制路径',
+                  icon: const Icon(Icons.copy),
+                  onPressed: () =>
+                      copyText(context, state.downloadDirectoryLabel),
+                ),
+              ],
             ),
           ),
           if (!Platform.isAndroid)

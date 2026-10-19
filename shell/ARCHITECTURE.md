@@ -186,17 +186,25 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 | document-start 注入脚本 | ✅ | ✅（DevTools 协议） | — |
 | JS ↔ 原生消息桥 | ✅ | ✅ | — |
 | Cookie 管理 / 按域名清理 | ✅ | ✅ | — |
-| **下载事件拦截** | ✅ `onDownloadStartRequest` | ❌ | 注入脚本接管常见按钮/链接/blob；剩下的走 WebView2 自带下载（落到系统"下载"文件夹） |
+| **下载事件拦截** | ✅ `onDownloadStartRequest` | ❌（上游没订阅 WebView2 的 `DownloadStarting`） | 注入脚本接管：`a[download]` / blob / `?download` 两端都拦；**Windows 另加"扩展名像文件就接管"**，并在 `shouldOverrideUrlLoading` 里掐掉这类导航（我们主动 abort 会带来一个 `CANCELLED` 错误，按类型认出来不弹给用户）。仍未覆盖：POST 表单触发的下载（WebView2 会自己下到系统「下载」）|
 | **文件上传选择器** | ✅ | ❌（用 WebView2 内建选择器） | 引擎内建通道可用，不额外补 |
 | **Basic Auth 弹窗** | ✅ `onReceivedHttpAuthRequest` | ❌ | 罕见；凭据照常存起来（UI 与 Android 一致），Windows 端等第二步 |
 | 全屏视频事件 | ✅ | ❌ | 注入脚本监听 `fullscreenchange` 兜底 |
 | **"另存为"系统对话框** | ✅（SAF，不需要存储权限） | ❌（用"选目录 + 复制"替代） | Android 更顺，Windows 功能等价 |
 
-**第二步补齐路线（触发条件：Windows 用户反馈下载/上传不灵）**：
+**第二步补齐路线（触发条件：Windows 用户反馈下载/上传不灵 —— 2026-10-19 已经触发过一次，
+当时先做了脚本侧兜底）**：
 自写一个薄 Windows 插件（C++/WinRT，把 WebView2 作为子窗口宿主），直接接
 `DownloadStarting` / `ShowFilePicker` / `BasicAuthenticationRequested` / `ContainsFullScreenElementChanged`，
 把上表四个 ❌ 填掉。之所以不现在做：约 800 行 C++，而本机没有 Visual Studio，写完只能靠 CI 反复试错
 ——先把两条流水线跑通、有真机反馈再动它。
+
+> **为什么脚本侧兜底值得先做**：它把"典型下载按钮"从"文件不知道去哪了"变成"进 App 下载器、
+> 落点可见、能续传、带 Cookie"。要验证这段跑在网页里的逻辑不能靠读代码：本机用
+> Edge 无头模式跑真引擎（`--headless=new --dump-dom` + 一个把 `post()` 记下来的桩页面）
+> 点 8 种链接，确认只有该下载的被接管（`a[download]`、`.pdf`/`.ZIP`、`?download=1`、带名字的
+> `download` 属性能把名字带过来，blob 走分片通道，`.html` 和普通页面不动）。
+> 步骤见 `shell/app/test/bridge_script_test.dart` 顶部注释。
 
 > 另一个 Windows 相关的构建事实：`flutter_inappwebview_windows` 在 CMake 配置阶段要用 **nuget**
 > 拉 WebView2 / WIL / nlohmann.json 的 SDK，所以 CI 里显式确保 nuget 可用（见 `shell-build.yml`）。
@@ -286,6 +294,7 @@ shell/
 | **P2** | Flutter 壳 UI + 引擎适配：站点列表、添加站点、浏览页、前进后退、下载页、设置页 | 能装能跑，网页操作与浏览器一致 | ✅ `flutter analyze` 无 issue；CI 两端都出包（APK / Windows 便携包），产物已验（CJK App 名、包名、预置站点、图标都在包里）|
 | **P2.1** | App 组件测试（`shell/app/test/`，`flutter test`）：把"添加站点 → 写进配置 → 能被浏览页按 id 找到"这类界面流程真跑一遍 | 用例会红 | ✅ 3 用例全绿，CI 的 Android job 里跑；已验证：把修复注释掉用例立刻变红 |
 | **P3** | 桥接层补齐：下载三条路径、上传、外部协议、权限 | 下载能进手机/电脑本地，上传能选文件 | 🟡 已完成：三条下载路径 / 上传交引擎 / 外部协议 / 权限弹窗 / 按域名清 Cookie；未做：系统通知栏进度、每站点 profile 严格隔离、下载历史入库 |
+| **P3.1** | Windows 下载接管（用户反馈"下载的东西没到本机"）：注入脚本认 `a[download]`/扩展名/`?download`，导航层掐掉下载导航并吞掉自己造成的 `CANCELLED`；落点兜底不再退到系统临时目录；下载页/设置页把目录亮出来并可一键打开 | 点下载能进 App 下载器，且文件在哪一眼看得到 | ✅ 已做：脚本逻辑用 Edge 无头真引擎验过（8 种链接只有该下载的被接管）；`flutter test` 7 用例守住脚本占位符与开关。仍未覆盖 POST 表单下载（见 §11）|
 | **P4** | 白标 CI：`workflow_dispatch` 输入 + 图标生成 + 产物命名 | 输入名字/图标/网址 → 拿到专属 APP | ✅ 已跑通并验证：`app_name=万能壳白标测试` / `app_id=com.demo.whitelabel` / `preset_url=flutter.dev` 出的包，APK 与 zip 里的 `preset.json`、exe 名（`whitelabel.exe`）、五档图标都对；图标取自站点首页声明 |
 | **P5** | （按需）自写 Windows WebView2 宿主，补齐 §7 的四个 ❌；每站点 profile 严格隔离 | Windows 下载/上传与 Android 一致 | ⏳ 未开始（触发条件见 §7） |
 
@@ -300,4 +309,6 @@ shell/
 - **Windows 依赖 WebView2 运行时**：Win10/11 通常自带（随 Edge 更新）；没有的机器给出安装引导，
   另可提供"自带运行时"的离线包版本（体积 +150MB）。
 - **Windows 的下载/上传/Basic Auth/全屏**：见 §7，四个 ❌ 是引擎限制，兜底见同表。
+  具体到下载：**POST 表单触发的下载**（少数网盘/导出接口）脚本认不出来，那种会由 WebView2
+  自己下到系统的「下载」文件夹 —— 文件在机器上，但不在 App 的下载列表里。
 - **iOS / macOS / Linux**：不在交付范围。
