@@ -113,6 +113,12 @@ void main() {
           reason: 'fetch/XHR 的 attachment 接管必须保持移除，否则打包下载会被拆散');
       expect(js.contains('getResponseHeader'), isFalse,
           reason: 'XHR 侧同样不许再读 Content-Disposition');
+      // 回归护栏：blob: 下载（含页面拼好的 zip）必须在 URL.createObjectURL 处
+      // 截获 Blob 本体。只靠 fetch('blob:…') 在部分 WebView 里读不出来，
+      // 表现为"点了没反应、什么都下不了"。
+      expect(js.contains('URL.createObjectURL'), isTrue,
+          reason: 'zip/单文件下载要在源头抓住 Blob 本体');
+      expect(js.contains('WS_BLOBS'), isTrue);
     });
   });
 }
