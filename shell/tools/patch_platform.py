@@ -18,6 +18,21 @@ import re
 import sys
 
 
+def _force_utf8_output() -> None:
+    """让本脚本的中文输出在 Windows 上也能打印出来。
+
+    Windows 上 Python 的 stdout 默认跟随控制台代码页（cp437 / cp1252），
+    打印"已改："这种中文会直接抛 UnicodeEncodeError 崩掉——在 CI 里表现为
+    "exit code 1、却看不到任何原因"，非常难查（本仓库真的踩过一次）。
+    errors="replace" 是兜底：即便重设失败，也只是显示成问号，不会让构建挂掉。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def patch_manifest(path: str, label: str) -> None:
     p = pathlib.Path(path)
     s = p.read_text(encoding="utf-8")
@@ -41,7 +56,8 @@ def patch_manifest(path: str, label: str) -> None:
             1,
         )
 
-    safe_label = label.replace('"', "&quot;").replace("<", "&lt;").replace("&", "&amp;")
+    # 顺序要紧：& 必须先换，否则后面产生的 &quot; 会被二次转义成 &amp;quot;
+    safe_label = label.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
     s, count = re.subn(r'android:label="[^"]*"', 'android:label="%s"' % safe_label, s, count=1)
     if count == 0:
         print("警告：清单里没找到 android:label，应用名没改上", file=sys.stderr)
@@ -84,6 +100,7 @@ def patch_windows(dir_path: str, app_name: str) -> None:
 
 
 def main() -> int:
+    _force_utf8_output()
     ap = argparse.ArgumentParser(description="构建期平台文件补丁")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
