@@ -20,7 +20,7 @@ on:
         required: false
         default: ''
       app_id:
-        description: '包名/组织名，例如 com.corp.oa。留空 = dev.webshell.app'
+        description: '包名/组织名，例如 com.corp.oa。留空 = dev.webshell.webshell（最后一段决定 Windows 的 exe 名）'
         required: false
         default: ''
       preset_url:
@@ -110,6 +110,16 @@ jobs:
       ALLOW_ADD_SITE: ${{ github.event.inputs.allow_add_site || 'true' }}
     steps:
       - uses: actions/checkout@v4
+
+      # ubuntu-22.04 的镜像自带 ImageMagick，**ubuntu-24.04 起就没有了**（2026-10 查
+      # actions/runner-images 的软件清单：24.04 与 26.04 里都搜不到 imagemagick，
+      # 而 ubuntu-latest 已经指向 24.04+），所以这里显式装一次。
+      # 顺带装 DejaVu 字体：首字母图标要用字体，否则只能退化成几何图形。
+      - name: 装 ImageMagick 与字体
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick fonts-dejavu-core
+          (magick -version 2>/dev/null || convert -version) | head -2
 
       - name: 生成图标与白标配置
         run: |

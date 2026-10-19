@@ -43,7 +43,7 @@ App 的主界面：
 | 输入 | 留空时 | 说明 |
 | --- | --- | --- |
 | `app_name` | `WebShell` | App 显示名。安卓桌面图标名、Windows 窗口标题都用它。**可以中文** |
-| `app_id` | `dev.webshell.app` | 包名/应用 ID，如 `com.corp.oa`。最后一段会规整成合法标识符（小写、字母数字下划线、不以数字开头），Windows 的 exe 名也取自这一段 |
+| `app_id` | `dev.webshell.webshell` | 包名/应用 ID，如 `com.corp.oa`。最后一段会规整成合法标识符（小写、字母数字下划线、不以数字开头），Windows 的 exe 名也取自这一段 |
 | `preset_url` | 无预置站点（= 通用壳） | 预置站点入口，如 `oa.corp.com`、`http://192.168.1.10:8080`。只写域名会自动补 `https://` |
 | `preset_name` | 用域名 | 预置站点在列表里显示的名字 |
 | `theme_color` | `#2962FF` | 主题色，`#RRGGBB` |

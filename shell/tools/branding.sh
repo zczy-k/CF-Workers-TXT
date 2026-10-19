@@ -17,9 +17,13 @@
 #   APP_NAME='公司 OA' APP_ID=com.corp.oa PRESET_URL=oa.corp.com bash shell/tools/branding.sh out
 set -euo pipefail
 
+# say 放在最前面：下面每一步（包括环境自检）都可能要报一句人话，
+# 定义晚一步就会变成 "say: command not found"，把报错信息本身搞得更难懂。
+say() { printf '%s\n' "---- $*"; }
+
 OUT_DIR="${1:-branding-out}"
 APP_NAME="${APP_NAME:-WebShell}"
-APP_ID="${APP_ID:-dev.webshell.app}"
+APP_ID="${APP_ID:-dev.webshell.webshell}"
 PRESET_URL="${PRESET_URL:-}"
 PRESET_NAME="${PRESET_NAME:-}"
 THEME_COLOR="${THEME_COLOR:-#2962FF}"
@@ -29,7 +33,9 @@ AUTO_ICON="${AUTO_ICON:-true}"
 ALLOW_ADD_SITE="${ALLOW_ADD_SITE:-true}"
 
 if command -v magick >/dev/null 2>&1; then IM="magick"; elif command -v convert >/dev/null 2>&1; then IM="convert"; else
-  say "找不到 ImageMagick（CI 的 ubuntu runner 自带；本地跑请先装 imagemagick），没法生成图标"
+  # 实测：ubuntu-22.04 的镜像自带 ImageMagick，**ubuntu-24.04 起就没有了**，
+  # 所以由 shell-build.yml 用 apt 装（哪怕装了也要留着这条，脚本单独跑时能说清原因）。
+  say "找不到 ImageMagick（CI 里由 shell-build.yml 用 apt 安装；本地跑请先装 imagemagick），没法生成图标"
   exit 1
 fi
 
@@ -46,8 +52,6 @@ done
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUT_DIR"
-
-say() { printf '%s\n' "---- $*"; }
 
 # 主题色只认 #RRGGBB。手填的输入不能直接喂给 shell 算术与 ImageMagick：
 # 一个拼错的颜色会让 `16#FFZZZZZZ` 当场报错退出，看起来像脚本坏了。
