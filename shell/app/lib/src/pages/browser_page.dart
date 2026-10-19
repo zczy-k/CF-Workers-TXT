@@ -12,6 +12,7 @@ import '../engine/scripts.dart';
 import '../open.dart';
 import '../state.dart';
 import 'downloads_page.dart';
+import 'settings_page.dart';
 import 'site_edit_page.dart';
 
 /// 站点浏览页：一个站点一个 WebView。
@@ -792,6 +793,20 @@ class _BrowserPageState extends State<BrowserPage> {
                 _snack('已清除登录态');
               },
             ),
+            // 直达模式下没有首页，App 设置（下载目录、保持登录这些）从这里进。
+            if (widget.state.branding.singleSiteMode)
+              ListTile(
+                leading: const Icon(Icons.settings_outlined),
+                title: const Text('设置'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (BuildContext _) => SettingsPage(state: widget.state),
+                    ),
+                  );
+                },
+              ),
           ],
         ),
       ),
