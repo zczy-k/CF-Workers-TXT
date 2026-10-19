@@ -101,7 +101,7 @@ flutter pub get; flutter build windows --release
 # 产物：build\windows\x64\runner\Release\ 整个目录
 ```
 
-> 建议首次 `flutter pub get` 后把 `client/app/pubspec.lock` 提交进来，锁定依赖版本。
+> `client/app/pubspec.lock` 已经提交进仓库，锁定依赖版本，CI 和本地装出来的是同一套。
 
 ---
 
@@ -176,6 +176,9 @@ flutter pub get; flutter build windows --release
 | 搜索搜不到正文 | 站点没绑 KV，或索引没建。搜索页横幅里有「重建索引」 |
 | 分享页看不到新内容 | 链接指向的是影子副本，改完要再点一次「发布」（或分享页的「重新发布」） |
 | `http://192.168.x.x` 连不上 | Android 默认禁明文。CI 已给 manifest 加 `usesCleartextTraffic="true"`；自建时注意同一件事 |
+| `flutter build apk` 报 `:file_picker:checkReleaseAarMetadata` | 老版 `file_picker`（8.x）自己的 Android 模块写死 `compileSdk 34`，而它的传递依赖要求 ≥36。升到 `file_picker ^13` + `flutter_secure_storage ^11`（这两个包必须一起升，win32 依赖卡在一起） |
+| CI 里 `dart analyze` 报 `Cannot negate option "--no-fatal-infos"` | Dart 3.13 起 `dart analyze` 删了这个选项。core 用 `dart analyze --no-fatal-warnings`；app 侧相反，`flutter analyze` 默认把 info 也算致命，必须显式 `--no-fatal-infos` |
+| 想看 CI 的完整日志却提示 "Sign in to view logs" | Actions 日志要登录才能看。临时把失败日志推到一条分支再从 `raw.githubusercontent.com` 读；或在本地用同样的命令跑一遍（`--no-fatal-infos` 这类差异本地一看就知道） |
 
 ---
 
