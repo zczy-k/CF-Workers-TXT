@@ -315,6 +315,10 @@ class ShellState extends ChangeNotifier {
   }
 
   void pauseDownload(String id) {
+    // blob/data 导出是页面把内存里的字节分片推过来，没有"暂停"可言（不能去暂停
+    // 浏览器的 FileReader）。要中止只能取消；这里对 blob 任务不置状态，免得出现
+    // "已暂停、文件却还在长"的假象。
+    if (_blobKeyOf(id) != null) return;
     downloads.pause(id);
     _onDownloadsChanged();
   }
@@ -325,11 +329,45 @@ class ShellState extends ChangeNotifier {
   }
 
   Future<void> cancelDownload(String id) async {
+    // blob/data 导出不走网络下载管线（它由页面脚本分片 POST 过来），所以不能只靠
+    // downloads.cancel：那样任务虽然标成"已取消"，脚本还在继续推数据、半截文件也
+    // 留在磁盘上（假取消 + 文件泄漏）。这里先把这条 blob 会话收干净。
+    final String? blobKey = _blobKeyOf(id);
+    if (blobKey != null) {
+      await _dropBlobSession(blobKey);
+      downloads.cancel(id);
+      _onDownloadsChanged();
+      return;
+    }
     await downloads.cancel(id);
     _onDownloadsChanged();
   }
 
+  /// 这条下载任务对应的 blob 会话 key（不是 blob 任务就返回 null）。
+  String? _blobKeyOf(String id) {
+    for (final MapEntry<String, _BlobSession> e in _blobs.entries) {
+      if (e.value.task.id == id) return e.key;
+    }
+    return null;
+  }
+
+  /// 关闭并丢弃一条 blob 会话：关掉写句柄、删掉半截文件。
+  Future<void> _dropBlobSession(String key) async {
+    final _BlobSession? session = _blobs.remove(key);
+    if (session == null) return;
+    try {
+      await session.sink.close();
+    } catch (_) {}
+    try {
+      final String? path = session.task.savePath;
+      if (path != null && File(path).existsSync()) await File(path).delete();
+    } catch (_) {}
+  }
+
   void removeDownload(String id) {
+    // 还在写的 blob 任务直接删记录会漏掉没关的文件句柄和半截文件，先收干净。
+    final String? blobKey = _blobKeyOf(id);
+    if (blobKey != null) unawaited(_dropBlobSession(blobKey));
     downloads.remove(id);
     _onDownloadsChanged();
   }

@@ -61,20 +61,20 @@ void main() {
       expect(js.contains('"X-Space":"1 2"'), isTrue);
     });
 
-    test('自动接管规则：扩展名两端都开，?download 与"链接文字"只给 Windows', () {
-      // Android：只有保守的扩展名规则
-      final String android = buildBridgeScript(_site());
-      expect(android.contains('var GUESS_QUERY = false;'), isTrue);
-      expect(android.contains('var GUESS_LABEL = false;'), isTrue);
+    test('自动接管规则：默认保守，可由站点显式开满 ?download 与"链接文字"', () {
+      // 默认：只有保守的扩展名规则（不传参时）
+      final String defaults = buildBridgeScript(_site());
+      expect(defaults.contains('var GUESS_QUERY = false;'), isTrue);
+      expect(defaults.contains('var GUESS_LABEL = false;'), isTrue);
 
-      // Windows：三条都开（引擎不给下载事件，只能多认几种）
-      final String windows = buildBridgeScript(
+      // 开满：三条都开（浏览器页现在两端都用这组，引擎给不了下载事件的场景靠它兜底）
+      final String loose = buildBridgeScript(
         _site(),
         guessQuery: true,
         guessByLabel: true,
       );
-      expect(windows.contains('var GUESS_QUERY = true;'), isTrue);
-      expect(windows.contains('var GUESS_LABEL = true;'), isTrue);
+      expect(loose.contains('var GUESS_QUERY = true;'), isTrue);
+      expect(loose.contains('var GUESS_LABEL = true;'), isTrue);
     });
 
     test('默认扩展名表是保守表：图片/音视频/纯文本不许自动接管', () {
@@ -97,6 +97,13 @@ void main() {
       expect(js.contains('wantsDownload'), isTrue);
       // 走了 window.open 的下载也要接住
       expect(js.contains('origWindowOpen'), isTrue);
+      // 程序化 a.click()（很多文件保存库不把它插进 DOM，事件不冒泡）单独劫持
+      expect(js.contains('HTMLAnchorElement.prototype.click'), isTrue);
+      // 服务端生成的下载：fetch/XHR 响应头是 Content-Disposition: attachment
+      expect(js.contains('content-disposition'), isTrue);
+      expect(js.contains('blobStart'), isTrue, reason: '内存字节落盘通道要接上');
+      // POST 表单提交回附件的场景
+      expect(js.contains("addEventListener('submit'"), isTrue);
     });
   });
 }
