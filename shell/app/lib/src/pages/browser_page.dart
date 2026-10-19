@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 
@@ -186,6 +187,8 @@ class _BrowserPageState extends State<BrowserPage> {
               onCreateWindow: _onCreateWindow,
               onCloseWindow: (InAppWebViewController controller) async {},
               onDownloadStartRequest: _onDownloadStart,
+              // 站点开了"信任自签证书"才放行（Android / iOS 走这里）。
+              onReceivedServerTrustAuthRequest: _onServerTrust,
               onReceivedHttpAuthRequest: _onHttpAuth,
               onPermissionRequest: _onPermissionRequest,
             ),
@@ -332,6 +335,9 @@ class _BrowserPageState extends State<BrowserPage> {
       databaseEnabled: true,
       thirdPartyCookiesEnabled: true,
       loadsImagesAutomatically: widget.state.config.loadImages,
+      // 用户关掉"保持登录"时改用无痕会话：Cookie / localStorage 都不落盘，
+      // 重开 App 天然是未登录状态（和系统浏览器的"隐私模式"一致）。
+      incognito: !widget.state.config.saveLogin,
       // 安全第一：不允许网页通过 file:// 读本机文件；上传走系统文件选择器，不受影响
       allowFileAccess: false,
       allowContentAccess: false,
@@ -359,10 +365,41 @@ class _BrowserPageState extends State<BrowserPage> {
     return headers;
   }
 
+  @override
+  void dispose() {
+    // 关了"保持登录"：离开浏览页就把这个站点的登录态擦掉（无痕语义）。
+    // Cookie 在这里清；WebView 侧已用 incognito，让新会话天然干净。
+    if (!widget.state.config.saveLogin) {
+      final SiteProfile? site = widget.state.config.byId(widget.siteId);
+      if (site != null) unawaited(widget.state.clearSiteData(site));
+    }
+    widget.state.activeController = null;
+    super.dispose();
+  }
+
   // ------------------------------------------------------------------ 回调
+
+  /// 站点的 HTTPS 证书校验失败（自签 / 过期 / 域名不匹配）时的处理。
+  ///
+  /// 只有站点自己开了"信任自签证书"才放行，否则交回系统判断（默认拒绝）；
+  /// 刻意不做全局忽略 —— 那等于把整个 App 的 HTTPS 安全一次性废掉。
+  /// Windows（WebView2）不触发这个回调，证书校验由平台自己处理。
+  Future<ServerTrustAuthResponse> _onServerTrust(
+    InAppWebViewController controller,
+    ServerTrustChallenge challenge,
+  ) async {
+    final SiteProfile? site = _site;
+    final bool allow = site != null && site.allowSelfSignedCert;
+    return ServerTrustAuthResponse(
+      action: allow
+          ? ServerTrustAuthResponseAction.PROCEED
+          : ServerTrustAuthResponseAction.CANCEL,
+    );
+  }
 
   Future<void> _onWebViewCreated(InAppWebViewController controller) async {
     _controller = controller;
+    widget.state.activeController = controller;
 
     // 记下引擎的真实 UA：下载时要用它，否则很多站点会回 403
     try {

@@ -16,12 +16,16 @@ class FakeFile {
     this.fileName,
     this.supportsRange = true,
     this.contentType = 'application/octet-stream',
+    this.etag = 'v1',
   });
 
   final List<int> bytes;
   final String? fileName;
   final bool supportsRange;
   final String contentType;
+
+  /// 服务端给的 ETag（续传校验器；客户端回带成 If-Range）。
+  final String? etag;
 
   int get length => bytes.length;
 }
@@ -69,6 +73,12 @@ class FakeTransport implements DownloadTransport {
   /// 全局开关：服务端会不会忽略 Range（返回 200 + 全量）。
   bool honourRange = true;
 
+  /// 模拟"服务端文件在两次请求之间变了"：忽略 Range，回 200 + 全量。
+  bool fileChanged = false;
+
+  /// 最近一次 open 收到的 If-Range（测"续传带上校验器"）。
+  String? lastIfRange;
+
   int _inFlight = 0;
   int maxInFlight = 0;
 
@@ -77,9 +87,11 @@ class FakeTransport implements DownloadTransport {
     Uri url, {
     required Map<String, String> headers,
     int offset = 0,
+    String? ifRange,
   }) async {
     openCount++;
     requestedOffsets.add(offset);
+    lastIfRange = ifRange;
     lastHeaders = Map<String, String>.of(headers);
 
     if (failTimes > 0) {
@@ -92,7 +104,9 @@ class FakeTransport implements DownloadTransport {
       throw DownloadException('找不到文件', statusCode: 404);
     }
 
-    final bool canResume = offset > 0 && honourRange && file.supportsRange;
+    // 文件变了（If-Range 不匹配）时服务端忽略 Range，回 200 全量。
+    final bool canResume =
+        offset > 0 && honourRange && file.supportsRange && !fileChanged;
     // 不支持续传时必须从头发全量，否则测不出"服务端忽略 Range"这条分支
     final int start = canResume
         ? (offset > file.length ? file.length : offset)
@@ -107,6 +121,7 @@ class FakeTransport implements DownloadTransport {
       totalLength: file.length,
       acceptsRanges: honourRange && file.supportsRange,
       contentType: file.contentType,
+      etag: file.etag,
     );
   }
 

@@ -191,6 +191,23 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 | **Basic Auth 弹窗** | ✅ `onReceivedHttpAuthRequest` | ❌ | 罕见；凭据照常存起来（UI 与 Android 一致），Windows 端等第二步 |
 | 全屏视频事件 | ✅ | ❌ | 注入脚本监听 `fullscreenchange` 兜底 |
 | **"另存为"系统对话框** | ✅（SAF，不需要存储权限） | ❌（用"选目录 + 复制"替代） | Android 更顺，Windows 功能等价 |
+| **HTTPS 自签 / 过期证书** | ✅ `onReceivedServerTrustAuthRequest`（按站点放行） | ❌（证书校验由 WebView2 平台处理） | 只对站点档案里勾了"信任自签证书"的站点回 `PROCEED`，**不做全局忽略**；见 §7.1 |
+
+### 7.1 本轮精修（把"有开关没接线 / 有字段没发送"补成端到端可用）
+
+用户反馈要"像原生"，下面几处原来只有开关 / 字段、没有真正生效，本次补全：
+
+- **续传 `If-Range`**：`DownloadTask` 记下服务端给的 `ETag` / `Last-Modified`，续传时回带成
+  `If-Range`（`core/lib/src/download.dart`）。服务端文件变了就回 `200` 全量，我们从 0 重写，
+  而不是断点接着拼——否则会得到一个前半老、后半新的坏文件。服务端不支持 Range 也走这条回退。
+- **"保持登录"真开关**：关掉即（a）用 `incognito` 打开浏览页（Cookie / localStorage 不落盘）、
+  （b）清掉已落地的 Cookie + 全部 Web Storage + 缓存（`state.dart` 的 `_wipeAllLoginState`）。
+  以前这个开关只写配置、没人消费，是假开关。
+- **按站点"信任自签证书"**：`SiteProfile.allowSelfSignedCert` → 浏览页
+  `onReceivedServerTrustAuthRequest` 只对该站点回 `PROCEED`；别的站点照常走系统校验。
+  刻意不做全局忽略——那等于把整个 App 的 HTTPS 安全性一次性废掉。
+- **按站点清登录态补全**：`clearSiteData` 除 Cookie 外，还注入 JS 清该来源的
+  `localStorage` / `sessionStorage` / `caches` / `IndexedDB`（引擎没有"按域删这些"的 API）。
 
 **第二步补齐路线（触发条件：Windows 用户反馈下载/上传不灵 —— 2026-10-19 已经触发过一次，
 当时先做了脚本侧兜底）**：
@@ -299,6 +316,7 @@ shell/
 | **P3** | 桥接层补齐：下载三条路径、上传、外部协议、权限 | 下载能进手机/电脑本地，上传能选文件 | 🟡 已完成：三条下载路径 / 上传交引擎 / 外部协议 / 权限弹窗 / 按域名清 Cookie；未做：系统通知栏进度、每站点 profile 严格隔离、下载历史入库 |
 | **P3.1** | 下载"到本机"这一条链（用户反馈"下载的东西没到本机"+ "下载列表什么都没有"）：Windows 注入脚本认 `a[download]`/保守扩展名/`?download`/链接文字；导航层掐掉下载导航并吞掉自己造成的 `CANCELLED`；落点兜底不再退到系统临时目录；Android 落点从被系统屏蔽的 `Android/data/…` 换到文件管理器看得见的 `Android/media/…`（升级自动迁移）；下载页实时刷新、目录一键打开 | 点下载能进 App 下载器，且文件在哪一眼看得到 | ✅ 已做：脚本逻辑用 Edge 无头真引擎验过（16 种链接 × 两种配置，只有该下载的被接管）；`dart test` 83 用例 + `flutter test` 8 用例守住规则与脚本占位符。仍未覆盖 POST 表单下载（见 §11）|
 | **P4** | 白标 CI：`workflow_dispatch` 输入 + 图标生成 + 产物命名 | 输入名字/图标/网址 → 拿到专属 APP | ✅ 已跑通并验证：`app_name=万能壳白标测试` / `app_id=com.demo.whitelabel` / `preset_url=flutter.dev` 出的包，APK 与 zip 里的 `preset.json`、exe 名（`whitelabel.exe`）、五档图标都对；图标取自站点首页声明 |
+| **P3.2** | 精修（用户反馈"精修到原生"）：续传加 `If-Range` 校验器（文件变了自动回全量、不拼坏文件）；"保持登录"做成真开关（关掉即清 Cookie + Web Storage + 缓存，浏览页改用 `incognito`）；站点级"信任自签证书"；按站点清登录态补 `localStorage`/`IndexedDB`/`caches` | `dart test` 全绿、`flutter analyze` 干净、真机确认下载 | ✅ 已做：core / app 改动见 §4 / §6 / §7.1；仍受限项见 §11 |
 | **P5** | （按需）自写 Windows WebView2 宿主，补齐 §7 的四个 ❌；每站点 profile 严格隔离 | Windows 下载/上传与 Android 一致 | ⏳ 未开始（触发条件见 §7） |
 
 ---

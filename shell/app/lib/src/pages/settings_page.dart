@@ -105,11 +105,13 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           SwitchListTile(
             title: const Text('保持登录状态'),
-            subtitle: const Text('关闭后，重启 App 需要重新登录各站点'),
+            subtitle: Text(config.saveLogin
+                ? '关闭后立即退出登录，且重启 App 不再保留登录态'
+                : '已关闭：登录态不落盘，重启后需重新登录'),
             value: config.saveLogin,
-            onChanged: (bool value) {
-              setState(() => config.saveLogin = value);
-              state.saveSoon();
+            onChanged: (bool value) async {
+              await state.setSaveLogin(value);
+              if (mounted) setState(() {});
             },
           ),
 
