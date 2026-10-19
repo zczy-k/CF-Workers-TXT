@@ -204,25 +204,29 @@ class _BrowserPageState extends State<BrowserPage> {
     final ThemeData theme = Theme.of(context);
     return AppBar(
       titleSpacing: 4,
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Text(
-            _title.isEmpty ? site.displayName : _title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
-          if (widget.state.branding.showAddressBar)
-            Text(
-              displayUrl(_url.isEmpty ? site.startUrl : _url),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurfaceVariant),
+      // 直达模式（白标 + 禁加站）：整个 App 就这一个站点，标题栏文字没有信息量，
+      // 只留刷新 / 更多按钮，让它看起来更像一个独立 App。
+      title: widget.state.branding.singleSiteMode
+          ? null
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  _title.isEmpty ? site.displayName : _title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+                if (widget.state.branding.showAddressBar)
+                  Text(
+                    displayUrl(_url.isEmpty ? site.startUrl : _url),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurfaceVariant),
+                  ),
+              ],
             ),
-        ],
-      ),
       actions: <Widget>[
         IconButton(
           tooltip: '刷新',
@@ -344,6 +348,11 @@ class _BrowserPageState extends State<BrowserPage> {
       // 用户关掉"保持登录"时改用无痕会话：Cookie / localStorage 都不落盘，
       // 重开 App 天然是未登录状态（和系统浏览器的"隐私模式"一致）。
       incognito: !widget.state.config.saveLogin,
+      // 缓存策略：有缓存就用缓存、没有才走网络。WebView 默认的 LOAD_DEFAULT
+      // 每次都回源验证（304 也要等一个来回），用户感知就是"每次重开 App 都卡一下
+      // 重新加载"。LOAD_CACHE_ELSE_NETWORK 让二次打开直接吃本地缓存、秒出。
+      // "保持登录"关掉时 incognito 已经把缓存一并禁了，不受这里影响。
+      cacheMode: CacheMode_.LOAD_CACHE_ELSE_NETWORK,
       // 安全第一：不允许网页通过 file:// 读本机文件；上传走系统文件选择器，不受影响
       allowFileAccess: false,
       allowContentAccess: false,

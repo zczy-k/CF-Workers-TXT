@@ -9,6 +9,8 @@ environment:
 # 刻意只有 dart:io / dart:convert / dart:async：
 #   URL 规整、配置读写、下载队列全部是纯逻辑，所以能在 ubuntu runner 上秒级跑完单测，
 #   不需要 Flutter、不需要模拟器、更不需要真机。
+#   （src/pinyin/ 是内嵌的汉字转拼音实现，纯 Dart、零依赖 —— lpinyin 2.0.3 的
+#    sdk 约束停在 <3.0.0，Dart 3 下 pub 解不开，所以抄源码而不是加依赖。）
 dev_dependencies:
   test: ^1.25.0
   lints: ^4.0.0

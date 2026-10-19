@@ -20,24 +20,47 @@ Future<Directory> iconCacheDir() async {
 /// 默认下载目录。
 ///
 /// - **Windows**：用户的「下载」文件夹。资源管理器里直接就能看见，符合直觉。
-/// - **Android**：`Android/media/<包名>/Download`。它是应用私有目录（**不需要任何
-///   存储权限**，也不用 SAF），但和 `Android/data/<包名>` 不同 —— 后者从 Android 11
-///   起被系统对文件管理器和 MTP 屏蔽，用户翻不到，体验上就成了"下载的东西没到手机上"。
-///   `Android/media/<包名>` 文件管理器看得见（WhatsApp 的媒体就放这儿）。
-///   想放进系统「下载」或别的文件夹，用下载列表里的「另存为」走系统选择器（SAF）。
-Future<String> defaultDownloadDirectory() async {
+/// - **Android**：优先系统公共 `Download/<App 名文件夹>`（App 名是中文就取拼音
+///   首字母，如「成都」→ `Download/cd`；英文名直接用原名）。Android 11+ 可以
+///   免权限直接写，文件管理器和系统「下载」里一眼可见。
+///   建不出来（Android 10 的 scoped storage、个别厂商 ROM）就回退
+///   `Android/media/<包名>/Download`——它同样免权限、文件管理器可见，并且
+///   **卸载时系统自动删掉**。注意：公共 `Download` 里的文件卸载时系统**不会**
+///   删（Android 没有任何卸载钩子，这是平台行为）。
+///
+///   目录探测在首次启动（配置为空）和升级迁移时各做一次，结果写进配置，
+///   下载时不再反复探测。
+Future<String> defaultDownloadDirectory(String appName) async {
   if (Platform.isAndroid) {
+    Directory? ext;
     try {
-      final Directory? ext = await getExternalStorageDirectory();
-      if (ext != null) {
-        // 可见的 Android/media/<包名>；实在不行才退回应用私有目录
+      ext = await getExternalStorageDirectory();
+    } catch (_) {
+      ext = null; // 拿不到应用外部目录就落到桌面式兜底
+    }
+    if (ext != null) {
+      // 1) 公共 Download/<App 名>：建得出来 = 可直写（Android 11+），用它
+      final String? volumeRoot = androidVolumeRootOf(ext.path);
+      if (volumeRoot != null) {
+        try {
+          final Directory dl = Directory(
+            joinPath(joinPath(volumeRoot, 'Download'), appFolderName(appName)),
+          );
+          if (!dl.existsSync()) dl.createSync(recursive: true);
+          return dl.path;
+        } catch (_) {
+          // Android 10 / 厂商限制写不了公共目录：走下面的回退
+        }
+      }
+      // 2) 回退：可见的 Android/media/<包名>/Download（卸载自动清）
+      try {
         final String base = androidMediaDirOf(ext.path) ?? ext.path;
         final Directory dl = Directory(joinPath(base, 'Download'));
         if (!dl.existsSync()) dl.createSync(recursive: true);
         return dl.path;
+      } catch (_) {
+        // 再落兜底
       }
-    } catch (_) {
-      // 落到下面的兜底
     }
   }
   final String home = defaultDownloadDir();
