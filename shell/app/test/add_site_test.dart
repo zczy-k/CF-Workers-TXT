@@ -22,6 +22,7 @@ class _NoNetworkTransport implements DownloadTransport {
   Future<DownloadResponse> open(
     Uri url, {
     required Map<String, String> headers,
+    String? ifRange,
     int offset = 0,
   }) =>
       throw UnimplementedError('测试不下载');
