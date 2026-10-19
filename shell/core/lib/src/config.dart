@@ -20,6 +20,7 @@ class ShellConfig {
     this.wifiOnlyDownloads = false,
     this.loadImages = true,
     this.saveLogin = true,
+    this.closeToTray = true,
     Branding? branding,
   })  : sites = sites ?? <SiteProfile>[],
         branding = branding ?? Branding.generic;
@@ -47,6 +48,9 @@ class ShellConfig {
 
   /// 允许站点保持登录（Cookie 持久化）。
   bool saveLogin;
+
+  /// 桌面端：点关闭/最小化时收进系统托盘，而不是退出/缩到任务栏。
+  bool closeToTray;
 
   Branding branding;
 
@@ -127,6 +131,7 @@ class ShellConfig {
         'wifiOnlyDownloads': wifiOnlyDownloads,
         'loadImages': loadImages,
         'saveLogin': saveLogin,
+        'closeToTray': closeToTray,
         'branding': branding.toJson(),
       };
 
@@ -159,6 +164,7 @@ class ShellConfig {
     config.wifiOnlyDownloads = _asBool(map['wifiOnlyDownloads'], false);
     config.loadImages = _asBool(map['loadImages'], true);
     config.saveLogin = _asBool(map['saveLogin'], true);
+    config.closeToTray = _asBool(map['closeToTray'], true);
     return config;
   }
 

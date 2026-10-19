@@ -5,6 +5,7 @@ import 'package:webshell_core/webshell_core.dart';
 
 import '../open.dart';
 import '../state.dart';
+import '../widgets/centered.dart';
 import 'site_edit_page.dart' show copyText;
 
 /// 下载列表：进度、暂停/继续/取消/重试、打开文件、另存为。
@@ -38,28 +39,16 @@ class DownloadsPage extends StatelessWidget {
               ),
             ],
           ),
-          body: tasks.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Text(
-                      '还没有下载。\n\n在站点里点下载链接就行；\n'
-                      '前端生成的文件（blob）和长按链接也能下载。\n\n'
-                      '文件会保存到：\n$dir'
-                      // Windows 上引擎拿不到下载事件，总有一小部分下载会由引擎自己
-                      // 完成（直接落到系统「下载」文件夹）。先说清楚，省得用户以为没下成。
-                      '${Platform.isWindows ? '\n\n（少数下载会由引擎自己完成，落到系统的「下载」文件夹，不会出现在这个列表里）' : ''}',
-                      textAlign: TextAlign.center,
-                    ),
+          body: Centered(
+            child: tasks.isEmpty
+                ? _Empty(dir: dir)
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                    itemCount: tasks.length,
+                    itemBuilder: (BuildContext context, int index) =>
+                        _TaskCard(state: state, task: tasks[index]),
                   ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.only(bottom: 24),
-                  itemCount: tasks.length,
-                  separatorBuilder: (BuildContext context, int index) => const Divider(height: 1),
-                  itemBuilder: (BuildContext context, int index) =>
-                      _TaskTile(state: state, task: tasks[index]),
-                ),
+          ),
           bottomNavigationBar: dir.isEmpty
               ? null
               : SafeArea(
@@ -102,8 +91,62 @@ class DownloadsPage extends StatelessWidget {
   }
 }
 
-class _TaskTile extends StatelessWidget {
-  const _TaskTile({required this.state, required this.task});
+class _Empty extends StatelessWidget {
+  const _Empty({required this.dir});
+
+  final String dir;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                color: colors.primary.withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.download_outlined,
+                size: 44,
+                color: colors.primary,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              '还没有下载',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '在站点里点下载链接就行；\n'
+              '前端生成的文件（blob）和长按链接也能下载。\n\n'
+              '文件会保存到：\n$dir'
+              // Windows 上引擎拿不到下载事件，总有一小部分下载会由引擎自己
+              // 完成（直接落到系统「下载」文件夹）。先说清楚，省得用户以为没下成。
+              '${Platform.isWindows ? '\n\n（少数下载会由引擎自己完成，落到系统的「下载」文件夹，不会出现在这个列表里）' : ''}',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TaskCard extends StatelessWidget {
+  const _TaskCard({required this.state, required this.task});
 
   final ShellState state;
   final DownloadTask task;
@@ -113,35 +156,49 @@ class _TaskTile extends StatelessWidget {
     final bool inProgress = task.status == DownloadStatus.running || task.status == DownloadStatus.queued;
     final bool indeterminate = task.total == null || task.total! <= 0;
 
-    return ListTile(
-      isThreeLine: task.status == DownloadStatus.failed,
-      leading: Icon(_icon, color: _iconColor(context)),
-      title: Text(task.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          if (inProgress) ...<Widget>[
-            const SizedBox(height: 4),
-            LinearProgressIndicator(
-              value: indeterminate ? null : task.progress,
-              minHeight: 3,
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+        child: Column(
+          children: <Widget>[
+            ListTile(
+              dense: true,
+              leading: Icon(_icon, color: _iconColor(context)),
+              title: Text(
+                task.fileName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  _subtitle(),
+                  style: Theme.of(context).textTheme.bodySmall,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              trailing: PopupMenuButton<String>(
+                onSelected: (String value) => _onAction(context, value),
+                itemBuilder: (BuildContext context) => _menuItems(),
+              ),
+              onTap: task.status == DownloadStatus.done ? () => _open(context) : null,
             ),
+            if (inProgress)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: LinearProgressIndicator(
+                  value: indeterminate ? null : task.progress,
+                  minHeight: 5,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
           ],
-          const SizedBox(height: 4),
-          Text(
-            _subtitle(),
-            style: Theme.of(context).textTheme.bodySmall,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
+        ),
       ),
-      trailing: PopupMenuButton<String>(
-        onSelected: (String value) => _onAction(context, value),
-        itemBuilder: (BuildContext context) => _menuItems(),
-      ),
-      onTap: task.status == DownloadStatus.done ? () => _open(context) : null,
     );
   }
 

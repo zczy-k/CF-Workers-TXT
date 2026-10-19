@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:webshell_core/webshell_core.dart';
 
 import 'src/app.dart';
+import 'src/desktop/tray_controller.dart';
 import 'src/state.dart';
 
 Future<void> main() async {
@@ -12,6 +13,16 @@ Future<void> main() async {
 
   final Branding branding = await loadBranding();
   final ShellState state = await ShellState.create(branding);
+
+  // 桌面端：关闭/最小化收进系统托盘（移动端没有托盘，supported 为 false 直接跳过）
+  if (TrayController.supported) {
+    final TrayController tray = TrayController(
+      appName: branding.appName,
+      hideToTray: () => state.config.closeToTray,
+    );
+    await tray.start();
+  }
+
   runApp(WebShellApp(state: state));
 }
 

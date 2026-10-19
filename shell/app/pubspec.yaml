@@ -32,6 +32,10 @@ dependencies:
   open_filex: ^5.0.0
   # Basic Auth 的密码：进系统安全存储（Keystore / DPAPI），绝不写进配置文件
   flutter_secure_storage: ^11.2.0
+  # 桌面端窗口行为：拦截关闭/最小化按钮（配合下面的托盘收进去）
+  window_manager: ^0.5.2
+  # 桌面端系统托盘：图标 + 右键菜单（打开 / 退出）
+  tray_manager: ^0.5.3
 
 dev_dependencies:
   flutter_test:
@@ -43,3 +47,5 @@ flutter:
   assets:
     # 白标配置：通用壳的默认值就在仓库里，CI 会按 workflow 输入重写它再打包。
     - assets/preset.json
+    # 系统托盘图标（桌面端关闭/最小化收进托盘时用）
+    - assets/tray_icon.ico
