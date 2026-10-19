@@ -302,15 +302,20 @@ class _BrowserPageState extends State<BrowserPage> {
               },
               icon: const Icon(Icons.home_outlined),
             ),
-            IconButton(
-              tooltip: '下载',
-              onPressed: () => Navigator.of(context).push<void>(
-                MaterialPageRoute<void>(builder: (BuildContext _) => DownloadsPage(state: widget.state)),
-              ),
-              icon: Badge(
-                isLabelVisible: widget.state.activeDownloadCount > 0,
-                label: Text('${widget.state.activeDownloadCount}'),
-                child: const Icon(Icons.download_outlined),
+            // 浏览页是 push 出来的路由，App 级的 ListenableBuilder 不会重建它 ——
+            // 必须自己监听 state，否则下载一开始角标永远亮不起来（用户以为没在下载）。
+            ListenableBuilder(
+              listenable: widget.state,
+              builder: (BuildContext ctx, Widget? _) => IconButton(
+                tooltip: '下载',
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(builder: (BuildContext _) => DownloadsPage(state: widget.state)),
+                ),
+                icon: Badge(
+                  isLabelVisible: widget.state.activeDownloadCount > 0,
+                  label: Text('${widget.state.activeDownloadCount}'),
+                  child: const Icon(Icons.download_outlined),
+                ),
               ),
             ),
           ],
