@@ -1,0 +1,14 @@
+name: cfwtxt_core
+description: CF-Workers-TXT 客户端核心库 —— 纯 Dart，零第三方依赖（可在 CI 里直接 dart test）
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+# 刻意不声明任何 dependencies：
+#   认证走"表单登录"，不算 sha256；HTTP 走 dart:io 自带的 HttpClient。
+#   整个 core 因此可以在 ubuntu runner 上用 `dart test` 秒级跑完，不需要 Flutter、不需要模拟器。
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^4.0.0

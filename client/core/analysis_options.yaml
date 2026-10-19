@@ -1,0 +1,9 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-raw-types: false
+  errors:
+    # 这个库故意把"服务端字段缺失"当正常情况（边用边加字段），所以不要求 exhaustive 风格
+    unused_import: warning
