@@ -6,12 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-// CacheMode_ 是 InAppWebViewSettings.cacheMode 字段的实际类型，但上游包的
-// 导出列表（types/main.dart 的 show 子句）只放行了不带下划线的 CacheMode，
-// 从包入口拿不到，只能直接引 platform_interface 的源文件（字段就是它定义的，
-// 赋值绕不开这个类型）。
-import 'package:flutter_inappwebview_platform_interface/src/types/cache_mode.dart'
-    show CacheMode_;
 import 'package:webshell_core/webshell_core.dart';
 
 import '../engine/scripts.dart';
@@ -358,7 +352,7 @@ class _BrowserPageState extends State<BrowserPage> {
       // 每次都回源验证（304 也要等一个来回），用户感知就是"每次重开 App 都卡一下
       // 重新加载"。LOAD_CACHE_ELSE_NETWORK 让二次打开直接吃本地缓存、秒出。
       // "保持登录"关掉时 incognito 已经把缓存一并禁了，不受这里影响。
-      cacheMode: CacheMode_.LOAD_CACHE_ELSE_NETWORK,
+      cacheMode: CacheMode.LOAD_CACHE_ELSE_NETWORK,
       // 安全第一：不允许网页通过 file:// 读本机文件；上传走系统文件选择器，不受影响
       allowFileAccess: false,
       allowContentAccess: false,
