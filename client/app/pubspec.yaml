@@ -23,10 +23,16 @@ dependencies:
 
   # 密码与会话 Cookie 走平台安全存储（Android Keystore / Windows DPAPI），
   # 绝不写进 shared_preferences
-  flutter_secure_storage: ^9.2.2
+  #
+  # 注意：这两个包必须一起升。file_picker 12+ 的 Windows 实现要求 win32 ^6，
+  # 而 flutter_secure_storage 9.x 钉的是 win32 ^5，单独升 file_picker 解不出来。
+  # 也不能停在 file_picker 8.x：它自己的 Android 模块写死 compileSdk 34，
+  # 而它的传递依赖 flutter_plugin_android_lifecycle 要求 ≥36，CI 上会以
+  # ":file_picker:checkReleaseAarMetadata" 失败（新版改成继承 flutter.compileSdkVersion）。
+  flutter_secure_storage: ^11.2.0
 
   # 选文件上传（Android 与 Windows 都支持）
-  file_picker: ^8.1.2
+  file_picker: ^13.1.0
 
   # 分享链接用系统浏览器打开（HTML 预览也走它，见 ARCHITECTURE.md §1）
   url_launcher: ^6.3.0
