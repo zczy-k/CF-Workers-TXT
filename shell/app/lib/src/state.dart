@@ -244,11 +244,16 @@ class ShellState extends ChangeNotifier {
     return uniquePath(joinPath(_effectiveDownloadDir(), sanitizeFileName(name)));
   }
 
+  /// 当前生效的下载目录（给 UI 显示用：用户最常问的就是"文件存哪了"）。
+  String get downloadDirectoryLabel => _effectiveDownloadDir();
+
   String _effectiveDownloadDir() {
     final String? dir = config.downloadDir;
     // `content://` 是 Android 的 SAF 目录（P3 支持），现在还用不了，先落到应用目录
     if (dir != null && dir.isNotEmpty && !dir.startsWith('content://')) return dir;
-    return Directory.systemTemp.path;
+    // 兜底也必须是"用户找得到的地方"：以前这里退到系统临时目录，
+    // 结果文件确实下下来了，但没人能找到 —— 比失败还糟（静默）。
+    return defaultDownloadDir();
   }
 
   /// 下载要带的请求头：站点自定义头 + 引擎 UA + Referer + Cookie（向引擎要）。

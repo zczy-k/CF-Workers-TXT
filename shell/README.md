@@ -126,7 +126,8 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 | 前端生成的文件（`blob:` / `data:`）下载 | ✅ 注入脚本分片 + 消息桥落盘 |
 | 长按链接下载 / 复制 / 交给系统浏览器 | ✅ |
 | 上传（`<input type=file>`、多选、相机、Windows 拖拽） | ✅ 引擎原生选择器 |
-| 下载落点 | ✅ Android 到 `Android/data/<包名>/files/Download`（免存储权限），"另存为"走系统选择器；Windows 默认 `下载\WebShell`，可改任意目录 |
+| 下载落点 | ✅ Android 到 `Android/data/<包名>/files/Download`（免存储权限），"另存为"走系统选择器；Windows 默认用户目录下的「下载」，可改任意目录 |
+| 下载能否进 App 的下载列表 | ✅ Android 靠引擎的下载事件；Windows 引擎不给事件，靠"注入脚本 + 导航接管"认出 `a[download]`、blob、扩展名像文件、带 `?download` 的链接（POST 表单类下载除外，见 ARCHITECTURE §11）|
 | 打开下载好的文件 / 在文件夹中显示 | ✅ Android 交给系统关联应用；Windows 用资源管理器 |
 | 登录状态保持 | ✅ Cookie 存在 App 自己的 profile 里，重启仍在 |
 | 每个站点单独的登录态清理 | ✅ 按域名清 Cookie，不影响别的站点 |
@@ -137,7 +138,7 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 | 流媒体（`m3u8` / 分片）下载 | ❌ 不承诺，请用专门的下载工具 |
 | 系统通知栏下载进度 | ❌ 未做（进度在 App 内下载列表 + 角标） |
 | 每站点 profile 严格隔离（多进程/独立数据目录） | ❌ 未做：目前共用一份 profile，按域名清 Cookie；见 ARCHITECTURE §6 |
-| Windows 的下载拦截 / 上传对话框 / Basic Auth / 全屏事件 | ⚠️ 引擎不提供：下载与全屏有注入脚本兜底，Basic Auth 等第二步自写 WebView2 宿主 |
+| Windows 的下载拦截 / 上传对话框 / Basic Auth / 全屏事件 | ⚠️ 引擎不提供（见 ARCHITECTURE §7）：下载与全屏有注入脚本兜底，上传走 WebView2 内建选择器，Basic Auth 等第二步自写 WebView2 宿主 |
 | iOS / macOS / Linux | ❌ 不在范围 |
 
 ---
@@ -150,6 +151,8 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 | Windows 端窗口打不开 / 白屏 | 缺 WebView2 运行时 | 装 Evergreen Runtime；或确认系统 Edge 是新的 |
 | release APK 里所有请求都失败 | 安卓模板的 release 清单**默认没有** INTERNET 权限（只有 debug/profile 有） | 流水线已自动加上；如果你手动改过清单，检查这一条 |
 | 下载全部 403 / 下到的是登录页 | 少带了 Cookie / UA / Referer | 确认站点是先从 App 内登录的（不是系统浏览器）；必要时在该站点设置里配 UA 或请求头 |
+| **下载完了，文件在哪？** | —— | 「下载」页每条记录下面就是落点目录，页面底部也有，右边两个按钮：「打开文件夹」（直接开目录）和「复制路径」；设置页同样有这两个按钮 |
+| Windows 上点下载，下载列表里什么都没出现 | WebView2 的下载事件上游没接到原生（ARCHITECTURE §7），脚本只能认出"明确要下载"的链接 | ① 先去「下载」页点「打开文件夹」看系统的「下载」目录 —— 兜底没覆盖的下载会由 WebView2 自己落在那里；② 用长按链接 →「下载这个链接」强制走 App 下载器；③ 还不行请把那个页面的网址发我，我给脚本再加一条触发规则 |
 | 某个按钮点了没反应 | 站点用了 `window.open`、`blob:` 或特殊协议 | 已在引擎回调里覆盖；仍有问题请附网址反馈 |
 | Windows 构建报找不到 `nuget` / 拉 WebView2 SDK 失败 | 插件在 CMake 阶段要拉 nuget 包 | 流水线已确保 nuget 可用；网络抖动重跑一次 |
 | Windows 编译插件报 `error C2338: static assertion failed: 'error STL1011'`（提到 `/await`、`<experimental/coroutine>`） | MSVC 14.51（VS 18）起把这些判成硬错误，而上游 `flutter_inappwebview_windows`（经 WebView2/WIL）还在用 | 流水线会往 `windows/CMakeLists.txt` 注入 `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`（微软报错里给的逃生宏）。哪天上游改用 C++20 coroutine 就能删掉 |

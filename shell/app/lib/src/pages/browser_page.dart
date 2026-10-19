@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -48,6 +49,12 @@ class _BrowserPageState extends State<BrowserPage> {
   bool _canGoBack = false;
   bool _canForward = false;
   String? _error;
+
+  /// 被我们接管成下载的导航（url → 发生时间）。
+  ///
+  /// Windows 上我们靠"链接像文件"提前把导航掐掉，WebView2 会因此报一个
+  /// 导航失败；这张表用来认出"那是我们自己掐的"，别把红条弹给用户。
+  final Map<String, int> _interceptedAsDownload = <String, int>{};
 
   SiteProfile? get _site => widget.state.config.byId(widget.siteId);
 
@@ -119,7 +126,12 @@ class _BrowserPageState extends State<BrowserPage> {
               initialUserScripts: UnmodifiableListView<UserScript>(
                 <UserScript>[
                   UserScript(
-                    source: buildBridgeScript(site),
+                    // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7），
+                    // 只能让脚本按"链接扩展名像文件"兜底把下载意图报上来。
+                    source: buildBridgeScript(
+                      site,
+                      guessDownloadsByExtension: Platform.isWindows,
+                    ),
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                     forMainFrameOnly: false,
                   ),
@@ -152,6 +164,16 @@ class _BrowserPageState extends State<BrowserPage> {
               onReceivedError: (InAppWebViewController controller, WebResourceRequest request, WebResourceError error) {
                 // 子资源（图片、广告）失败不要弹错，只有主文档失败才提示
                 if (request.isForMainFrame != true) return;
+                // 我们自己把"看起来是下载"的导航 abort 掉时，WebView2 会报一个
+                // "操作已取消" —— 那是预期内的，不是真错误，别在页面上弹红条。
+                final String failedUrl = request.url.toString();
+                final int? interceptedAt = _interceptedAsDownload[failedUrl];
+                final bool ourAbort = error.type == WebResourceErrorType.CANCELLED ||
+                    (interceptedAt != null && nowMs() - interceptedAt < 10000);
+                if (ourAbort) {
+                  _interceptedAsDownload.remove(failedUrl);
+                  return;
+                }
                 if (!mounted) return;
                 setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
               },
@@ -386,6 +408,18 @@ class _BrowserPageState extends State<BrowserPage> {
         return null;
       },
     );
+    // 注入脚本报上来的下载意图（Windows 上这是唯一能把下载交给我们的通道）
+    controller.addJavaScriptHandler(
+      handlerName: 'downloadRequest',
+      callback: (List<dynamic> args) {
+        final Map<String, dynamic> data = payload(args);
+        _enqueueDownload(
+          (data['url'] as Object?)?.toString() ?? '',
+          suggestedName: (data['name'] as Object?)?.toString(),
+        );
+        return null;
+      },
+    );
     controller.addJavaScriptHandler(
       handlerName: 'fullscreen',
       callback: (List<dynamic> args) {
@@ -432,6 +466,17 @@ class _BrowserPageState extends State<BrowserPage> {
 
     if (!isHttpUrl(url)) return NavigationActionPolicy.CANCEL;
 
+    // Windows：WebView2 的下载事件没有接到原生，导航到"看起来是文件"的地址时
+    // 我们自己接管下载 —— 否则 WebView2 会自己下完，下载列表里一行都不会出现，
+    // 用户也不知道文件去了哪（"下载的东西没到本机"）。
+    // 宁可在这里提前拦下：漏拦一次就是一条静默失败的下载。
+    if (Platform.isWindows && isProbablyDownloadUrl(url)) {
+      _interceptedAsDownload[url] = nowMs();
+      if (_interceptedAsDownload.length > 16) _interceptedAsDownload.clear();
+      _enqueueDownload(url);
+      return NavigationActionPolicy.CANCEL;
+    }
+
     // 「只在本站内导航」的站点：站外链接交给系统浏览器，不把用户带跑
     final SiteProfile? site = _site;
     if (site != null && site.stayInSite && !sameSite(url, site.startUrl)) {
@@ -473,15 +518,37 @@ class _BrowserPageState extends State<BrowserPage> {
     InAppWebViewController controller,
     DownloadStartRequest request,
   ) async {
-    final WebUri target = request.url;
+    _enqueueDownload(
+      request.url.toString(),
+      suggestedName: request.suggestedFilename,
+    );
+  }
+
+  /// 统一的下载入口（引擎事件 / 注入脚本 / 长按菜单都走这里）。
+  ///
+  /// 提示里**一定要写清楚存到哪儿**：Windows 上如果只有一句"已加入下载"，
+  /// 用户点完还是不知道文件跑哪去了（这也是他被"网页转 APP"工具坑过的地方）。
+  void _enqueueDownload(String url, {String? suggestedName}) {
+    if (url.trim().isEmpty) return;
     final SiteProfile? site = _site;
     final DownloadTask task = widget.state.enqueueDownload(
-      url: target.toString(),
+      url: url,
       siteId: site?.id ?? '',
-      suggestedName: request.suggestedFilename,
+      suggestedName: suggestedName,
       referer: _url.isEmpty ? site?.startUrl : _url,
     );
-    _snack('已加入下载：${task.fileName}');
+    if (!mounted) return;
+    final String dir = widget.state.downloadDirectoryLabel;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('已加入下载：${task.fileName}\n保存到 $dir'),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: '打开文件夹',
+          onPressed: () => openDirectory(dir),
+        ),
+      ),
+    );
   }
 
   Future<HttpAuthResponse?> _onHttpAuth(
@@ -573,13 +640,7 @@ class _BrowserPageState extends State<BrowserPage> {
               title: const Text('下载这个链接'),
               onTap: () async {
                 Navigator.of(sheetContext).pop();
-                final SiteProfile? site = _site;
-                final DownloadTask task = widget.state.enqueueDownload(
-                  url: url,
-                  siteId: site?.id ?? '',
-                  referer: _url,
-                );
-                _snack('已加入下载：${task.fileName}');
+                _enqueueDownload(url);
               },
             ),
             ListTile(

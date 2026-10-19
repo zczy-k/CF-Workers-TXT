@@ -41,6 +41,30 @@ Future<bool> revealInFolder(String path) async {
   return (await openLocalFile(path)) == null;
 }
 
+/// 打开一个目录（Windows：资源管理器；Android：交给系统文件管理器/打开器）。
+///
+/// 用途很直接：用户问"下到哪去了"，一个按钮就能看到那个文件夹。
+Future<String?> openDirectory(String path) async {
+  final Directory dir = Directory(path);
+  if (!dir.existsSync()) {
+    try {
+      dir.createSync(recursive: true);
+    } catch (e) {
+      return '这个目录打不开：$e';
+    }
+  }
+  if (Platform.isWindows) {
+    try {
+      // 注意 explorer 对目录路径的退出码不可靠，这里只关心有没有抛异常
+      await Process.run('explorer.exe', <String>[path]);
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+  return openLocalFile(path);
+}
+
 /// 交给系统（浏览器、电话、邮件…）打开。
 Future<bool> openExternal(String url) async {
   final Uri? uri = Uri.tryParse(url);

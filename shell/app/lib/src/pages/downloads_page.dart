@@ -15,67 +15,83 @@ class DownloadsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<DownloadTask> tasks = state.downloads.tasks;
-    final String dir = state.config.downloadDir ?? '';
+    // 下载页是 push 出来的路由：App 级的 ListenableBuilder 不会重建它
+    // （ModalRoute 的页面只建一次），所以这里必须自己监听 —— 否则点开之后
+    // 进度条不动、状态永远停在打开那一刻，看着就像"下载根本没开始"。
+    return ListenableBuilder(
+      listenable: state,
+      builder: (BuildContext context, Widget? _) {
+        final List<DownloadTask> tasks = state.downloads.tasks;
+        // 显示"实际会落到哪个目录"，而不是设置里那一格（可能是空的）
+        final String dir = state.downloadDirectoryLabel;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('下载'),
-        actions: <Widget>[
-          IconButton(
-            tooltip: '清空已完成',
-            onPressed: tasks.any((DownloadTask t) => t.status == DownloadStatus.done)
-                ? state.clearFinishedDownloads
-                : null,
-            icon: const Icon(Icons.cleaning_services_outlined),
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('下载'),
+            actions: <Widget>[
+              IconButton(
+                tooltip: '清空已完成',
+                onPressed: tasks.any((DownloadTask t) => t.status == DownloadStatus.done)
+                    ? state.clearFinishedDownloads
+                    : null,
+                icon: const Icon(Icons.cleaning_services_outlined),
+              ),
+            ],
           ),
-        ],
-      ),
-      body: tasks.isEmpty
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: Text(
-                  '还没有下载。\n\n在站点里点下载链接就行；\n'
-                  '前端生成的文件（blob）和长按链接也能下载。',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.only(bottom: 24),
-              itemCount: tasks.length,
-              separatorBuilder: (BuildContext context, int index) => const Divider(height: 1),
-              itemBuilder: (BuildContext context, int index) =>
-                  _TaskTile(state: state, task: tasks[index]),
-            ),
-      bottomNavigationBar: dir.isEmpty
-          ? null
-          : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                child: Row(
-                  children: <Widget>[
-                    const Icon(Icons.folder_outlined, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        dir,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
+          body: tasks.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Text(
+                      '还没有下载。\n\n在站点里点下载链接就行；\n'
+                      '前端生成的文件（blob）和长按链接也能下载。\n\n'
+                      '文件会保存到：\n$dir',
+                      textAlign: TextAlign.center,
                     ),
-                    IconButton(
-                      tooltip: '复制路径',
-                      iconSize: 18,
-                      onPressed: () => copyText(context, dir),
-                      icon: const Icon(Icons.copy),
-                    ),
-                  ],
+                  ),
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  itemCount: tasks.length,
+                  separatorBuilder: (BuildContext context, int index) => const Divider(height: 1),
+                  itemBuilder: (BuildContext context, int index) =>
+                      _TaskTile(state: state, task: tasks[index]),
                 ),
-              ),
-            ),
+          bottomNavigationBar: dir.isEmpty
+              ? null
+              : SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                    child: Row(
+                      children: <Widget>[
+                        const Icon(Icons.folder_outlined, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            dir,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '打开文件夹',
+                          iconSize: 18,
+                          onPressed: () => openDirectory(dir),
+                          icon: const Icon(Icons.folder_open),
+                        ),
+                        IconButton(
+                          tooltip: '复制路径',
+                          iconSize: 18,
+                          onPressed: () => copyText(context, dir),
+                          icon: const Icon(Icons.copy),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+        );
+      },
     );
   }
 }
