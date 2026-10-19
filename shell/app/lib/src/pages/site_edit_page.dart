@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:webshell_core/webshell_core.dart';
 
 import '../state.dart';
+import '../widgets/centered.dart';
 import '../widgets/site_avatar.dart';
 
 /// 站点设置：名称、地址、主题色、UA、自定义请求头、Basic Auth、站内导航。
@@ -67,176 +68,236 @@ class _SiteEditPageState extends State<SiteEditPage> {
 
   @override
   Widget build(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('站点设置'),
         actions: <Widget>[
-          TextButton(
+          FilledButton.tonal(
             onPressed: _busy ? null : _save,
             child: const Text('保存'),
           ),
+          const SizedBox(width: 12),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              SiteAvatar(site: _site, size: 48),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '图标抓的是网站自己的 favicon / apple-touch-icon。\n抓不到就用站点名字的首字母。',
-                  style: Theme.of(context).textTheme.bodySmall,
+      body: Centered(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: <Widget>[
+            _section(context, '基本信息'),
+            _card(<Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Row(
+                  children: <Widget>[
+                    SiteAvatar(site: _site, size: 48),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        '图标抓的是网站自己的 favicon / apple-touch-icon。\n抓不到就用站点名字的首字母。',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '重新抓取',
+                      onPressed: _busy ? null : _refreshIcon,
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ],
                 ),
               ),
-              IconButton(
-                tooltip: '重新抓取',
-                onPressed: _busy ? null : _refreshIcon,
-                icon: const Icon(Icons.refresh),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: Column(
+                  children: <Widget>[
+                    TextField(
+                      controller: _name,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(labelText: '名称'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _url,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: '地址',
+                        helperText: '改这里就等于换站点；只写域名会自动补 https://',
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _name,
-            decoration: const InputDecoration(
-              labelText: '名称',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _url,
-            keyboardType: TextInputType.url,
-            decoration: const InputDecoration(
-              labelText: '地址',
-              helperText: '改这里就等于换站点；只写域名会自动补 https://',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 16),
-          _label(context, '主题色'),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: _presetColors.map((int color) {
-              final bool selected = color == _themeColor;
-              return GestureDetector(
-                onTap: () => setState(() => _themeColor = color),
-                child: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: Color(color),
-                    shape: BoxShape.circle,
-                    border: selected
-                        ? Border.all(width: 3, color: Theme.of(context).colorScheme.onSurface)
-                        : null,
+            ]),
+
+            _section(context, '外观'),
+            _card(<Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: _presetColors.map((int color) {
+                    final bool selected = color == _themeColor;
+                    return GestureDetector(
+                      onTap: () => setState(() => _themeColor = color),
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: Color(color),
+                          shape: BoxShape.circle,
+                          border: selected
+                              ? Border.all(width: 2.5, color: colors.onSurface)
+                              : null,
+                        ),
+                        child: selected
+                            ? const Icon(Icons.check, size: 18, color: Colors.white)
+                            : null,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ]),
+
+            _section(context, '网络'),
+            _card(<Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                child: Column(
+                  children: <Widget>[
+                    TextField(
+                      controller: _ua,
+                      decoration: const InputDecoration(
+                        labelText: '自定义 User-Agent',
+                        hintText: '留空 = 用系统 WebView 的默认 UA',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _headers,
+                      minLines: 3,
+                      maxLines: 8,
+                      keyboardType: TextInputType.multiline,
+                      decoration: const InputDecoration(
+                        labelText: '自定义请求头',
+                        hintText: '每行一个，例如：\nAuthorization: Bearer xxxxx\nX-Requested-With: com.example.app',
+                        helperText: '页面内部的请求也会带上（注入脚本补），不只是顶层导航',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ]),
+
+            _section(context, '认证'),
+            _card(<Widget>[
+              SwitchListTile(
+                value: _basicAuth,
+                onChanged: (bool value) => setState(() => _basicAuth = value),
+                title: const Text('使用 Basic 认证'),
+                subtitle: const Text('服务器弹账号密码框的站点（浏览器地址栏那种）'),
+              ),
+              if (_basicAuth)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Column(
+                    children: <Widget>[
+                      TextField(
+                        controller: _user,
+                        decoration: const InputDecoration(labelText: '用户名'),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _password,
+                        obscureText: true,
+                        decoration: InputDecoration(
+                          labelText: '密码',
+                          helperText: _hasStoredPassword
+                              ? '已保存过密码，留空表示不修改'
+                              : '密码存系统安全存储（Keystore / DPAPI），不写进配置文件',
+                        ),
+                      ),
+                      if (_hasStoredPassword)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: _clearPassword,
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            label: const Text('清除已保存的密码'),
+                          ),
+                        ),
+                    ],
                   ),
-                  child: selected ? const Icon(Icons.check, size: 18, color: Colors.white) : null,
                 ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 20),
-          _label(context, '自定义 User-Agent'),
-          TextField(
-            controller: _ua,
-            decoration: const InputDecoration(
-              hintText: '留空 = 用系统 WebView 的默认 UA',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 20),
-          _label(context, '自定义请求头'),
-          TextField(
-            controller: _headers,
-            minLines: 3,
-            maxLines: 8,
-            keyboardType: TextInputType.multiline,
-            decoration: const InputDecoration(
-              hintText: '每行一个，例如：\nAuthorization: Bearer xxxxx\nX-Requested-With: com.example.app',
-              helperText: '页面内部的请求也会带上（注入脚本补），不只是顶层导航',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 20),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _basicAuth,
-            onChanged: (bool value) => setState(() => _basicAuth = value),
-            title: const Text('使用 Basic 认证'),
-            subtitle: const Text('服务器弹账号密码框的站点（浏览器地址栏那种）'),
-          ),
-          if (_basicAuth) ...<Widget>[
-            TextField(
-              controller: _user,
-              decoration: const InputDecoration(
-                labelText: '用户名',
-                border: OutlineInputBorder(),
+            ]),
+
+            _section(context, '行为'),
+            _card(<Widget>[
+              SwitchListTile(
+                value: _stayInSite,
+                onChanged: (bool value) => setState(() => _stayInSite = value),
+                title: const Text('只在本站内导航'),
+                subtitle: const Text('打开后，跳到别的域名的链接会交给系统浏览器，不会把用户带跑'),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _password,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: '密码',
-                helperText: _hasStoredPassword ? '已保存过密码，留空表示不修改' : '密码存系统安全存储（Keystore / DPAPI），不写进配置文件',
-                border: const OutlineInputBorder(),
+              SwitchListTile(
+                value: _allowSelfSignedCert,
+                onChanged: (bool value) => setState(() => _allowSelfSignedCert = value),
+                title: const Text('信任自签证书'),
+                subtitle: const Text('内网 / 自建站点的 HTTPS 证书不受系统信任时打开；只对这一个站点生效'),
               ),
-            ),
-            if (_hasStoredPassword)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: _clearPassword,
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  label: const Text('清除已保存的密码'),
+            ]),
+
+            _section(context, '其他'),
+            _card(<Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+                child: TextField(
+                  controller: TextEditingController(text: _site.id),
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: '站点 ID（内部标识，不可改）',
+                  ),
                 ),
               ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _delete,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('删除这个站点'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: colors.error,
+                    minimumSize: const Size.fromHeight(46),
+                  ),
+                ),
+              ),
+            ]),
           ],
-          const SizedBox(height: 8),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _stayInSite,
-            onChanged: (bool value) => setState(() => _stayInSite = value),
-            title: const Text('只在本站内导航'),
-            subtitle: const Text('打开后，跳到别的域名的链接会交给系统浏览器，不会把用户带跑'),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _allowSelfSignedCert,
-            onChanged: (bool value) => setState(() => _allowSelfSignedCert = value),
-            title: const Text('信任自签证书'),
-            subtitle: const Text('内网 / 自建站点的 HTTPS 证书不受系统信任时打开；只对这一个站点生效'),
-          ),
-          const Divider(height: 32),
-          TextField(
-            controller: TextEditingController(text: _site.id),
-            readOnly: true,
-            decoration: const InputDecoration(
-              labelText: '站点 ID（内部标识，不可改）',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 24),
-          OutlinedButton.icon(
-            onPressed: _busy ? null : _delete,
-            icon: const Icon(Icons.delete_outline),
-            label: const Text('删除这个站点'),
-            style: OutlinedButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _label(BuildContext context, String text) {
+  Widget _section(BuildContext context, String title) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Text(text, style: Theme.of(context).textTheme.labelLarge),
+      padding: const EdgeInsets.fromLTRB(8, 20, 8, 8),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w700,
+            ),
+      ),
+    );
+  }
+
+  Widget _card(List<Widget> children) {
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Column(children: children),
     );
   }
 

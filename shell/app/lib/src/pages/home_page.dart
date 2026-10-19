@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:webshell_core/webshell_core.dart';
 
 import '../state.dart';
+import '../widgets/centered.dart';
 import '../widgets/site_avatar.dart';
 import 'browser_page.dart';
 import 'downloads_page.dart';
@@ -39,9 +40,11 @@ class HomePage extends StatelessWidget {
           ),
         ],
       ),
-      body: config.sites.isEmpty
-          ? _EmptySites(branding: branding, onAdd: () => _addSite(context))
-          : _SiteList(state: state, onAdd: () => _addSite(context)),
+      body: Centered(
+        child: config.sites.isEmpty
+            ? _EmptySites(branding: branding, onAdd: () => _addSite(context))
+            : _SiteList(state: state, onAdd: () => _addSite(context)),
+      ),
       floatingActionButton: branding.allowAddSite && config.sites.isNotEmpty
           ? FloatingActionButton.extended(
               onPressed: () => _addSite(context),
@@ -80,30 +83,43 @@ class _EmptySites extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(
-              Icons.language_outlined,
-              size: 64,
-              color: Theme.of(context).colorScheme.primary,
+            Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                color: colors.primary.withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.language_outlined,
+                size: 44,
+                color: colors.primary,
+              ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
             Text(
               '还没有站点',
-              style: Theme.of(context).textTheme.titleLarge,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
             ),
             const SizedBox(height: 8),
             Text(
               '把任何一个网站的地址加进来，它就会变成这个 App 里的一个独立站点：\n'
               '翻页、登录、上传、下载都照常，下载会直接落到本机目录。',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 28),
             if (branding.allowAddSite)
               FilledButton.icon(
                 onPressed: onAdd,
@@ -127,15 +143,18 @@ class _SiteList extends StatelessWidget {
   Widget build(BuildContext context) {
     final List<SiteProfile> sites = state.config.sites;
     return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 96),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
       itemCount: sites.length + 1,
       itemBuilder: (BuildContext context, int index) {
         if (index == sites.length) {
           return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            padding: const EdgeInsets.only(top: 12),
             child: Text(
               '长按站点可以编辑名称、请求头、Basic Auth，或者清掉登录态。',
-              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
           );
         }
@@ -155,11 +174,12 @@ class _SiteCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool isCurrent = state.config.activeSiteId == site.id;
+    final ColorScheme colors = Theme.of(context).colorScheme;
     return Card(
-      margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        leading: SiteAvatar(site: site, size: 44),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        leading: SiteAvatar(site: site, size: 46),
         title: Row(
           children: <Widget>[
             Flexible(
@@ -171,15 +191,32 @@ class _SiteCard extends StatelessWidget {
               ),
             ),
             if (isCurrent) ...<Widget>[
-              const SizedBox(width: 6),
-              const Icon(Icons.star, size: 14),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '默认',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: colors.primary,
+                  ),
+                ),
+              ),
             ],
           ],
         ),
-        subtitle: Text(
-          displayUrl(site.startUrl),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            displayUrl(site.startUrl),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         trailing: const Icon(Icons.chevron_right),
         onTap: () {
@@ -358,7 +395,7 @@ class _AddSiteSheetState extends State<_AddSiteSheet> {
   Widget build(BuildContext context) {
     final EdgeInsets insets = MediaQuery.of(context).viewInsets;
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + insets.bottom),
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + insets.bottom),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -369,7 +406,7 @@ class _AddSiteSheetState extends State<_AddSiteSheet> {
             '填网站地址就行，比如 portal.example.com 或 http://192.168.1.10:8080',
             style: Theme.of(context).textTheme.bodySmall,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           TextField(
             controller: _url,
             autofocus: true,
@@ -378,7 +415,6 @@ class _AddSiteSheetState extends State<_AddSiteSheet> {
             decoration: InputDecoration(
               labelText: '站点地址',
               hintText: 'example.com',
-              border: const OutlineInputBorder(),
               errorText: _error,
             ),
             onChanged: (_) {
@@ -392,11 +428,10 @@ class _AddSiteSheetState extends State<_AddSiteSheet> {
             decoration: const InputDecoration(
               labelText: '名称（可留空）',
               hintText: '不填就用网站域名',
-              border: OutlineInputBorder(),
             ),
             onSubmitted: (_) => _submit(),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 24),
           FilledButton(
             onPressed: _submit,
             child: const Text('添加并打开'),

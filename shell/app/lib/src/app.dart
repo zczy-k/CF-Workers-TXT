@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'state.dart';
+import 'theme.dart';
 import 'pages/home_page.dart';
 
 class WebShellApp extends StatelessWidget {
@@ -17,17 +18,8 @@ class WebShellApp extends StatelessWidget {
         return MaterialApp(
           title: state.branding.appName,
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(seedColor: seed),
-            useMaterial3: true,
-          ),
-          darkTheme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: seed,
-              brightness: Brightness.dark,
-            ),
-            useMaterial3: true,
-          ),
+          theme: AppTheme.light(seed),
+          darkTheme: AppTheme.dark(seed),
           home: HomePage(state: state),
         );
       },
