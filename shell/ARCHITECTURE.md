@@ -136,7 +136,7 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 
 | | 默认目录 | 要不要权限 | "另存为" | 打开文件 |
 | --- | --- | --- | --- | --- |
-| **Android** | 应用外部目录 `Android/data/<包名>/files/Download`（文件管理器可见） | **不需要**（不用 MANAGE_EXTERNAL_STORAGE，弹窗少一大截） | `flutter_file_dialog` 的系统 SAF 选择器，复制到用户选的目录 | `open_filex` 交给系统关联应用 |
+| **Android** | `Android/media/<包名>/Download`（应用私有目录，但**文件管理器可见**；`Android/data/…` 从 Android 11 起被系统屏蔽，用户翻不到） | **不需要**（不用 MANAGE_EXTERNAL_STORAGE，弹窗少一大截） | `flutter_file_dialog` 的系统 SAF 选择器，复制到用户选的目录 | `open_filex` 交给系统关联应用 |
 | **Windows** | `%USERPROFILE%\Downloads\WebShell`（可在设置里改成任意目录） | — | 选目标目录 + 复制（不把整文件读进内存） | `explorer.exe` 交给系统关联程序 |
 
 > 进度显示在 App 内的下载列表（列表项 + 角标数字），**没有系统通知栏进度**——那要额外处理
@@ -186,7 +186,7 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 | document-start 注入脚本 | ✅ | ✅（DevTools 协议） | — |
 | JS ↔ 原生消息桥 | ✅ | ✅ | — |
 | Cookie 管理 / 按域名清理 | ✅ | ✅ | — |
-| **下载事件拦截** | ✅ `onDownloadStartRequest` | ❌（上游没订阅 WebView2 的 `DownloadStarting`） | 注入脚本接管：`a[download]` / blob / `?download` 两端都拦；**Windows 另加"扩展名像文件就接管"**，并在 `shouldOverrideUrlLoading` 里掐掉这类导航（我们主动 abort 会带来一个 `CANCELLED` 错误，按类型认出来不弹给用户）。仍未覆盖：POST 表单触发的下载（WebView2 会自己下到系统「下载」）|
+| **下载事件拦截** | ✅ `onDownloadStartRequest` | ❌（上游没订阅 WebView2 的 `DownloadStarting`） | 注入脚本接管：`a[download]` / blob 两端都拦；保守扩展名（zip/pdf/apk/docx…，**不含图片/音视频/纯文本**，免得把"看"变成"下"）两端都拦；**Windows 另加** `?download` 查询串与"链接文字写着下载/保存/导出"（`/note1/download` 这种光看 URL 猜不出来的地址就靠这条），并在 `shouldOverrideUrlLoading` 里掐掉这类导航（我们主动 abort 会带来一个 `CANCELLED` 错误，按类型 + 被接管过的 URL 认出来，不弹给用户）。仍未覆盖：POST 表单触发的下载（WebView2 会自己下到系统「下载」）|
 | **文件上传选择器** | ✅ | ❌（用 WebView2 内建选择器） | 引擎内建通道可用，不额外补 |
 | **Basic Auth 弹窗** | ✅ `onReceivedHttpAuthRequest` | ❌ | 罕见；凭据照常存起来（UI 与 Android 一致），Windows 端等第二步 |
 | 全屏视频事件 | ✅ | ❌ | 注入脚本监听 `fullscreenchange` 兜底 |
@@ -202,8 +202,11 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 > **为什么脚本侧兜底值得先做**：它把"典型下载按钮"从"文件不知道去哪了"变成"进 App 下载器、
 > 落点可见、能续传、带 Cookie"。要验证这段跑在网页里的逻辑不能靠读代码：本机用
 > Edge 无头模式跑真引擎（`--headless=new --dump-dom` + 一个把 `post()` 记下来的桩页面）
-> 点 8 种链接，确认只有该下载的被接管（`a[download]`、`.pdf`/`.ZIP`、`?download=1`、带名字的
-> `download` 属性能把名字带过来，blob 走分片通道，`.html` 和普通页面不动）。
+> 拿 **16 种链接 × 两种平台配置**各点一遍，确认：
+> Windows 配置下 `a[download]`、`.zip`/`.ZIP`/`.pdf`、`?download=1`、`/note1/download`（链接文字
+> 写着「下载」）、`class="download-btn"`、`Save File`、带名字的 `download` 属性都被接管（名字也带
+> 过来），blob 走分片通道；Android 配置下只接管 `a[download]`、二进制扩展名与 blob；
+> **两端都不动** `.html`、`.jpg`、`.mp4`、`.txt`、`.csv` 与普通链接（没有误伤）。
 > 步骤见 `shell/app/test/bridge_script_test.dart` 顶部注释。
 
 > 另一个 Windows 相关的构建事实：`flutter_inappwebview_windows` 在 CMake 配置阶段要用 **nuget**
@@ -294,7 +297,7 @@ shell/
 | **P2** | Flutter 壳 UI + 引擎适配：站点列表、添加站点、浏览页、前进后退、下载页、设置页 | 能装能跑，网页操作与浏览器一致 | ✅ `flutter analyze` 无 issue；CI 两端都出包（APK / Windows 便携包），产物已验（CJK App 名、包名、预置站点、图标都在包里）|
 | **P2.1** | App 组件测试（`shell/app/test/`，`flutter test`）：把"添加站点 → 写进配置 → 能被浏览页按 id 找到"这类界面流程真跑一遍 | 用例会红 | ✅ 3 用例全绿，CI 的 Android job 里跑；已验证：把修复注释掉用例立刻变红 |
 | **P3** | 桥接层补齐：下载三条路径、上传、外部协议、权限 | 下载能进手机/电脑本地，上传能选文件 | 🟡 已完成：三条下载路径 / 上传交引擎 / 外部协议 / 权限弹窗 / 按域名清 Cookie；未做：系统通知栏进度、每站点 profile 严格隔离、下载历史入库 |
-| **P3.1** | Windows 下载接管（用户反馈"下载的东西没到本机"）：注入脚本认 `a[download]`/扩展名/`?download`，导航层掐掉下载导航并吞掉自己造成的 `CANCELLED`；落点兜底不再退到系统临时目录；下载页/设置页把目录亮出来并可一键打开 | 点下载能进 App 下载器，且文件在哪一眼看得到 | ✅ 已做：脚本逻辑用 Edge 无头真引擎验过（8 种链接只有该下载的被接管）；`flutter test` 7 用例守住脚本占位符与开关。仍未覆盖 POST 表单下载（见 §11）|
+| **P3.1** | 下载"到本机"这一条链（用户反馈"下载的东西没到本机"+ "下载列表什么都没有"）：Windows 注入脚本认 `a[download]`/保守扩展名/`?download`/链接文字；导航层掐掉下载导航并吞掉自己造成的 `CANCELLED`；落点兜底不再退到系统临时目录；Android 落点从被系统屏蔽的 `Android/data/…` 换到文件管理器看得见的 `Android/media/…`（升级自动迁移）；下载页实时刷新、目录一键打开 | 点下载能进 App 下载器，且文件在哪一眼看得到 | ✅ 已做：脚本逻辑用 Edge 无头真引擎验过（16 种链接 × 两种配置，只有该下载的被接管）；`dart test` 83 用例 + `flutter test` 8 用例守住规则与脚本占位符。仍未覆盖 POST 表单下载（见 §11）|
 | **P4** | 白标 CI：`workflow_dispatch` 输入 + 图标生成 + 产物命名 | 输入名字/图标/网址 → 拿到专属 APP | ✅ 已跑通并验证：`app_name=万能壳白标测试` / `app_id=com.demo.whitelabel` / `preset_url=flutter.dev` 出的包，APK 与 zip 里的 `preset.json`、exe 名（`whitelabel.exe`）、五档图标都对；图标取自站点首页声明 |
 | **P5** | （按需）自写 Windows WebView2 宿主，补齐 §7 的四个 ❌；每站点 profile 严格隔离 | Windows 下载/上传与 Android 一致 | ⏳ 未开始（触发条件见 §7） |
 
@@ -311,4 +314,11 @@ shell/
 - **Windows 的下载/上传/Basic Auth/全屏**：见 §7，四个 ❌ 是引擎限制，兜底见同表。
   具体到下载：**POST 表单触发的下载**（少数网盘/导出接口）脚本认不出来，那种会由 WebView2
   自己下到系统的「下载」文件夹 —— 文件在机器上，但不在 App 的下载列表里。
+- **自动接管下载是"启发式"，不是通吃**：客户端只对"明确要下载"的链接下手（`download` 属性、
+  二进制扩展名、Windows 上再加 `?download` 与链接文字）。这是**刻意保守**的取舍 ——
+  宁可漏掉一次下载（文件仍会被引擎自己下到系统「下载」），也不要把"点开看图/看视频/看文本"
+  变成下载。链接文字规则偶尔会把"下载页面"当成下载（下到一个 `.html`），
+  长按链接 →「用系统浏览器打开」即可绕过。
+- **Android 文件可见性**：落点是 `Android/media/<包名>/Download`，主流文件管理器（含电脑 MTP）
+  能看到；但 Android 自己的「下载」应用里不会出现（那要写 MediaStore，属于下一步）。
 - **iOS / macOS / Linux**：不在交付范围。

@@ -126,11 +126,14 @@ class _BrowserPageState extends State<BrowserPage> {
               initialUserScripts: UnmodifiableListView<UserScript>(
                 <UserScript>[
                   UserScript(
-                    // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7），
-                    // 只能让脚本按"链接扩展名像文件"兜底把下载意图报上来。
+                    // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）：
+                    // 除了扩展名，还要靠 `?download` 查询串和"链接文字写着下载"兜底，
+                    // 否则 `/note1/download` 这种地址会被引擎自己悄悄下到别处。
+                    // Android 有原生下载事件，只留保守的扩展名规则，不多猜。
                     source: buildBridgeScript(
                       site,
-                      guessDownloadsByExtension: Platform.isWindows,
+                      guessQuery: Platform.isWindows,
+                      guessByLabel: Platform.isWindows,
                     ),
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                     forMainFrameOnly: false,
@@ -469,8 +472,10 @@ class _BrowserPageState extends State<BrowserPage> {
     // Windows：WebView2 的下载事件没有接到原生，导航到"看起来是文件"的地址时
     // 我们自己接管下载 —— 否则 WebView2 会自己下完，下载列表里一行都不会出现，
     // 用户也不知道文件去了哪（"下载的东西没到本机"）。
-    // 宁可在这里提前拦下：漏拦一次就是一条静默失败的下载。
-    if (Platform.isWindows && isProbablyDownloadUrl(url)) {
+    //
+    // 判断刻意用保守的 [isLikelyFileAttachment]（图片/音视频/纯文本不算）：
+    // 在这里误伤一次，用户点开一张图就变成了下载，比漏拦更难受。
+    if (Platform.isWindows && isLikelyFileAttachment(url)) {
       _interceptedAsDownload[url] = nowMs();
       if (_interceptedAsDownload.length > 16) _interceptedAsDownload.clear();
       _enqueueDownload(url);
@@ -543,10 +548,21 @@ class _BrowserPageState extends State<BrowserPage> {
       SnackBar(
         content: Text('已加入下载：${task.fileName}\n保存到 $dir'),
         duration: const Duration(seconds: 6),
-        action: SnackBarAction(
-          label: '打开文件夹',
-          onPressed: () => openDirectory(dir),
-        ),
+        action: Platform.isAndroid
+            // Android 没有"打开文件夹"这种 intent，这里改成"去下载列表看进度"
+            ? SnackBarAction(
+                label: '下载列表',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (BuildContext _) =>
+                        DownloadsPage(state: widget.state),
+                  ),
+                ),
+              )
+            : SnackBarAction(
+                label: '打开文件夹',
+                onPressed: () => openDirectory(dir),
+              ),
       ),
     );
   }

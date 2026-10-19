@@ -22,7 +22,7 @@ const Set<String> kExternalSchemes = <String>{
   'ed2k',
 };
 
-/// 常见"点一下就下载"的扩展名：用于长按链接时的判断。
+/// 常见"点一下就下载"的扩展名：用于长按链接时的判断（用户已经明确说要下载）。
 const Set<String> kDownloadExtensions = <String>{
   'zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz',
   'apk', 'exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'appimage',
@@ -33,6 +33,21 @@ const Set<String> kDownloadExtensions = <String>{
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'heic',
   'iso', 'img', 'bin', 'dat', 'db', 'sqlite',
   'torrent', 'ipa', 'jar', 'crx', 'xpi',
+};
+
+/// "WebView 基本没法内联显示"的类型 —— 点它当下载是**安全**的。
+///
+/// 和 [kDownloadExtensions] 的区别很重要：
+/// * 自动接管一次点击/导航时用**这个**（保守）：图片、音视频、纯文本、csv/json
+///   都被排除掉了，因为用户点它们多半是想"看"，把它们变成下载是倒退；
+/// * 用户已经明说"我要下载"的场合（长按菜单「下载这个链接」）才用全量表。
+const Set<String> kBinaryExtensions = <String>{
+  'zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz', 'zst',
+  'apk', 'exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'appimage', 'appx', 'ipa',
+  'pdf', 'epub', 'mobi', 'azw3', 'djvu',
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf',
+  'iso', 'img', 'bin', 'dat', 'db', 'sqlite', 'bak',
+  'torrent', 'jar', 'crx', 'xpi', 'whl',
 };
 
 /// Windows 上不允许作为文件名的保留字。
@@ -190,17 +205,46 @@ List<String> faviconCandidates(String url) {
   ];
 }
 
-/// 按扩展名判断"这个地址八成是个文件"，用于长按链接直接下载。
+/// 路径里的扩展名（小写、不含点）；拿不到就返回空串。
+///
+/// 只看**最后一段**：`/v1.2/download` 的末段是 `download`（没有扩展名），
+/// 不能把父目录里的 `.2` 当成扩展名。
+String extensionOf(String path) {
+  final String p = path.toLowerCase();
+  final int slash = p.lastIndexOf('/');
+  final int dot = p.lastIndexOf('.');
+  if (dot < 0 || dot < slash + 1) return '';
+  final String ext = p.substring(dot + 1);
+  // 末段以点结尾（`/file.`）不算扩展名；带分隔符的也不是（防 `?`/`#` 混进来）
+  if (ext.isEmpty || ext.contains('/') || ext.contains('?') || ext.contains('#')) {
+    return '';
+  }
+  if (ext.length > 12) return '';
+  return ext;
+}
+
+/// 按扩展名判断"这个地址八成是个文件"，用于长按链接直接下载（全量表）。
 bool isProbablyDownloadUrl(String url) {
   final Uri? u = Uri.tryParse(url);
   if (u == null) return false;
-  final String path = u.path.toLowerCase();
-  final int dot = path.lastIndexOf('.');
-  if (dot < 0) {
-    return u.query.toLowerCase().contains('download');
-  }
-  final String ext = path.substring(dot + 1);
+  final String ext = extensionOf(u.path);
+  if (ext.isEmpty) return u.query.toLowerCase().contains('download');
   return kDownloadExtensions.contains(ext);
+}
+
+/// **自动**接管点击/导航时用的保守判断：宁可漏，不可误伤。
+///
+/// 命中条件（二选一）：
+///   * 扩展名属于 [kBinaryExtensions]（WebView 显示不了的类型）；
+///   * 末段没有扩展名，但查询串里带 `download`（`?download=1`、`?action=download`）。
+///
+/// 不包含"链接文字写着下载"这类判断 —— 那是注入脚本在页面里做的事（能拿到 DOM）。
+bool isLikelyFileAttachment(String url) {
+  final Uri? u = Uri.tryParse(url);
+  if (u == null) return false;
+  final String ext = extensionOf(u.path);
+  if (ext.isNotEmpty) return kBinaryExtensions.contains(ext);
+  return u.query.toLowerCase().contains('download');
 }
 
 /// URL → 候选文件名（已做安全清理）。

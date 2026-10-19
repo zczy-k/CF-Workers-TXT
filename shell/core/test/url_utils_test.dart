@@ -149,6 +149,36 @@ void main() {
       expect(isProbablyDownloadUrl('https://a.com/x.apk?v=1'), isTrue);
       expect(isProbablyDownloadUrl('https://a.com/page'), isFalse);
       expect(isProbablyDownloadUrl('https://a.com/d?download=1'), isTrue);
+      // 长按菜单用的全量表：图片/文本也算"可能是文件"（用户已经说要下载）
+      expect(isProbablyDownloadUrl('https://a.com/pic.jpg'), isTrue);
+      expect(isProbablyDownloadUrl('https://a.com/note.md'), isTrue);
+    });
+
+    test('取扩展名只看最后一段（父目录里的点不算）', () {
+      expect(extensionOf('/a/b/file.tar.gz'), 'gz');
+      expect(extensionOf('/a/b/FILE.PDF'), 'pdf');
+      expect(extensionOf('/v1.2/download'), '');
+      expect(extensionOf('/a/b/file.'), '');
+      expect(extensionOf('/a/b'), '');
+      expect(extensionOf('/a/b/file.verylongextension'), ''); // 长得不像扩展名
+    });
+
+    test('自动接管用保守判断：图片/音视频/纯文本不算，二进制与 ?download 才算', () {
+      // 该接管的
+      expect(isLikelyFileAttachment('https://a.com/x.zip'), isTrue);
+      expect(isLikelyFileAttachment('https://a.com/doc.pdf'), isTrue);
+      expect(isLikelyFileAttachment('https://a.com/app.apk?ver=2'), isTrue);
+      expect(isLikelyFileAttachment('https://a.com/note1?download=1'), isTrue);
+      expect(isLikelyFileAttachment('https://a.com/export?action=DOWNLOAD'), isTrue);
+      // 不该误伤：用户点它们是想"看"
+      expect(isLikelyFileAttachment('https://a.com/pic.jpg'), isFalse);
+      expect(isLikelyFileAttachment('https://a.com/clip.mp4'), isFalse);
+      expect(isLikelyFileAttachment('https://a.com/song.mp3'), isFalse);
+      expect(isLikelyFileAttachment('https://a.com/note.md'), isFalse);
+      expect(isLikelyFileAttachment('https://a.com/data.csv'), isFalse);
+      expect(isLikelyFileAttachment('https://a.com/index.html'), isFalse);
+      expect(isLikelyFileAttachment('https://a.com/page'), isFalse);
+      expect(isLikelyFileAttachment('https://a.com/v1.2/download'), isFalse);
     });
   });
 }
