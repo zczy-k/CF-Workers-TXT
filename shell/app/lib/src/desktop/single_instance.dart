@@ -202,7 +202,10 @@ class SingleInstanceGuard {
       // 互斥键 = 包名（branding 应用名）。白标 CI 会改 preset.json 与
       // runner 标题，同一个包无论拷到哪个目录、exe 叫什么，键都一致。
       final String name = 'Local\\WebShell.SingleInstance.$windowTitle';
-      final Pointer<Uint16> namePtr = name.toNativeUtf16();
+      // toNativeUtf16() 给的是 Pointer<Utf16>（package:ffi 的扩展类型），
+      // 本文件签名按裸 FFI 写的是 Pointer<Uint16> —— 布局同为 16 位无符号，
+      // .cast 零开销转换。
+      final Pointer<Uint16> namePtr = name.toNativeUtf16().cast<Uint16>();
       try {
         final int handle = _createMutexW(nullptr, 1, namePtr);
         final int err = _getLastError();
@@ -282,8 +285,9 @@ class SingleInstanceGuard {
   void _notifyAlreadyRunning(String title) {
     final Pointer<Uint16> text =
         '$title 已经在运行了，请从任务栏或系统托盘找回窗口。'
-            .toNativeUtf16();
-    final Pointer<Uint16> caption = title.toNativeUtf16();
+            .toNativeUtf16()
+            .cast<Uint16>();
+    final Pointer<Uint16> caption = title.toNativeUtf16().cast<Uint16>();
     try {
       _messageBoxW(0, text, caption, _mbOk | _mbIconInformation);
     } catch (_) {
