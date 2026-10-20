@@ -4,8 +4,8 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 /// Win32 `PROCESSENTRY32W`（只声明用得到的字段；x64 下按 C ABI 自动对齐，
-/// sizeOf == 568）。
-class _ProcessEntry32W extends Struct {
+/// sizeOf == 568）。`Struct` 是 `base` 类，子类必须 `final`。
+final class _ProcessEntry32W extends Struct {
   @Uint32()
   external int dwSize;
 
@@ -38,18 +38,17 @@ class _ProcessEntry32W extends Struct {
 }
 
 // --------------------------------------------------------------- 原生签名
+//
+// 注：顶层窗口枚举走 `GetWindow(GetDesktopWindow(), GW_CHILD)` +
+// `GW_HWNDNEXT` 链，**不碰 `EnumWindows` 回调** —— 省掉 `Pointer.fromFunction`
+// 与 `NativeFunction<...>` 的 FFI 类型推导坑，行为等价（拿到的是同一份
+// 顶层窗口 Z 序列表）。
 
-typedef _EnumProcNative = Int32 Function(IntPtr hwnd, IntPtr lParam);
-typedef _EnumProcDart = int Function(int hwnd, int lParam);
+typedef _GetDesktopWindowNative = IntPtr Function();
+typedef _GetDesktopWindowDart = int Function();
 
-typedef _EnumWindowsNative = Int32 Function(
-  Pointer<NativeFunction<_EnumProcNative>> lpEnumFunc,
-  IntPtr lParam,
-);
-typedef _EnumWindowsDart = int Function(
-  Pointer<NativeFunction<_EnumProcDart>> lpEnumFunc,
-  int lParam,
-);
+typedef _GetWindowNative = IntPtr Function(IntPtr hwnd, Uint32 cmd);
+typedef _GetWindowDart = int Function(int hwnd, int cmd);
 
 typedef _GetClassNameWNative = Int32 Function(
   IntPtr hwnd,
@@ -129,16 +128,11 @@ class WebViewWindowGuard {
   static const int _swHide = 0;
   static const int _swShow = 5;
   static const int _th32csSnapProcess = 0x2; // TH32CS_SNAPPROCESS
+  static const int _gwChild = 5; // GW_CHILD
+  static const int _gwHwndNext = 2; // GW_HWNDNEXT
 
   /// 我们亲手藏起来的句柄。恢复时只放行这份名单。
   final List<int> _sweptHandles = <int>[];
-
-  // EnumWindows 回只能绑静态函数，上下文经单例字段传递。
-  // EnumWindows 是同步调用、Dart 又是单线程，不存在重入。
-  Set<int>? _enumPids;
-  List<int>? _enumOut;
-  Pointer<Uint32>? _enumPidBuf;
-  Pointer<Uint16>? _enumClsBuf;
 
   DynamicLibrary? _user32Lib;
   DynamicLibrary get _user32 => _user32Lib ??= DynamicLibrary.open('user32.dll');
@@ -147,8 +141,13 @@ class WebViewWindowGuard {
   DynamicLibrary get _kernel32 =>
       _kernel32Lib ??= DynamicLibrary.open('kernel32.dll');
 
-  late final _EnumWindowsDart _enumWindows = _user32
-      .lookupFunction<_EnumWindowsNative, _EnumWindowsDart>('EnumWindows');
+  late final _GetDesktopWindowDart _getDesktopWindow = _user32
+      .lookupFunction<_GetDesktopWindowNative, _GetDesktopWindowDart>(
+    'GetDesktopWindow',
+  );
+
+  late final _GetWindowDart _getWindow = _user32
+      .lookupFunction<_GetWindowNative, _GetWindowDart>('GetWindow');
 
   late final _GetClassNameWDart _getClassName = _user32
       .lookupFunction<_GetClassNameWNative, _GetClassNameWDart>('GetClassNameW');
@@ -240,6 +239,9 @@ class WebViewWindowGuard {
   // --------------------------------------------------------------- 内部实现
 
   /// 枚举本进程系下 WebView2 当前**可见**的 `Chrome_WidgetWin*` 顶层窗。
+  ///
+  /// 走桌面窗口的子链（Z 序），不回调、不分配二次堆；
+  /// 上限 10000 个纯属防死循环的保险丝。
   List<int> _findVisibleWebviewWindows() {
     final Set<int> pids = _webviewProcessPids();
     if (pids.isEmpty) return const <int>[];
@@ -247,41 +249,27 @@ class WebViewWindowGuard {
     final Pointer<Uint32> pidBuf = calloc<Uint32>();
     final Pointer<Uint16> clsBuf = calloc<Uint16>(256);
     try {
-      _enumPids = pids;
-      _enumOut = out;
-      _enumPidBuf = pidBuf;
-      _enumClsBuf = clsBuf;
-      _enumWindows(Pointer.fromFunction<_EnumProcDart>(_enumProc, 0), 0);
+      int hwnd = _getWindow(_getDesktopWindow(), _gwChild);
+      int guard = 0;
+      while (hwnd != 0 && guard++ < 10000) {
+        _getWindowThreadProcessId(hwnd, pidBuf);
+        if (pids.contains(pidBuf.value)) {
+          final int n = _getClassName(hwnd, clsBuf, 256);
+          if (n > 0) {
+            final String cls = String.fromCharCodes(clsBuf.asTypedList(n));
+            if (cls.startsWith('Chrome_WidgetWin') &&
+                _isWindowVisible(hwnd) != 0) {
+              out.add(hwnd);
+            }
+          }
+        }
+        hwnd = _getWindow(hwnd, _gwHwndNext);
+      }
     } finally {
-      _enumPids = null;
-      _enumOut = null;
-      _enumPidBuf = null;
-      _enumClsBuf = null;
       calloc.free(pidBuf);
       calloc.free(clsBuf);
     }
     return out;
-  }
-
-  /// EnumWindows 回调（静态，上下文走单例字段）。
-  static int _enumProc(int hwnd, int lParam) {
-    final WebViewWindowGuard g = instance;
-    final Pointer<Uint32>? pidBuf = g._enumPidBuf;
-    final Pointer<Uint16>? clsBuf = g._enumClsBuf;
-    final Set<int>? pids = g._enumPids;
-    final List<int>? out = g._enumOut;
-    if (pidBuf == null || clsBuf == null || pids == null || out == null) {
-      return 0; // 上下文丢了：停
-    }
-    g._getWindowThreadProcessId(hwnd, pidBuf);
-    if (!pids.contains(pidBuf.value)) return 1; // 不是我们系的 WebView2
-    final int n = g._getClassName(hwnd, clsBuf, 256);
-    if (n <= 0) return 1;
-    final String cls = String.fromCharCodes(clsBuf.asTypedList(n));
-    if (!cls.startsWith('Chrome_WidgetWin')) return 1;
-    if (g._isWindowVisible(hwnd) == 0) return 1;
-    out.add(hwnd);
-    return 1; // 继续枚举
   }
 
   /// 本进程（webshell.exe）所有**后代**进程里，映像名为
