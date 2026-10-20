@@ -70,6 +70,9 @@ class TrayController with TrayListener, WindowListener {
 
     await windowManager.ensureInitialized();
     await windowManager.setPreventClose(true);
+    // 把窗口标题钉在 branding 名上：单实例守卫按"类名+标题"找旧窗口，
+    // 标题必须与 branding 一致（哪怕 runner 的 main.cpp 没被 CI patch）。
+    await windowManager.setTitle(appName);
     windowManager.addListener(this);
     trayManager.addListener(this);
 

@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:webshell_core/webshell_core.dart';
 
 import 'src/app.dart';
+import 'src/desktop/single_instance.dart';
 import 'src/desktop/tray_controller.dart';
 import 'src/state.dart';
 
@@ -12,6 +14,15 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final Branding branding = await loadBranding();
+
+  // Windows 单实例：同一个包（同一 branding 名）只许跑一个。第二个实例
+  // 唤醒旧窗口后立即退出 —— 多开会让各自的 WebView2 残留弹窗互相看不见
+  // 对方进程系的清扫名单，正是"桌面点不动"Bug 的多开放大版（见
+  // single_instance.dart / webview_window_guard.dart 的注释）。
+  if (!SingleInstanceGuard.instance.claim(windowTitle: branding.appName)) {
+    exit(0);
+  }
+
   final ShellState state = await ShellState.create(branding);
 
   // 桌面端：关闭按钮收进系统托盘（最小化按钮走系统默认进任务栏，不接管；
