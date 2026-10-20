@@ -8,31 +8,47 @@ import 'package:webshell_core/webshell_core.dart';
 
 import '../paths.dart';
 
-/// 桌面端的窗口与托盘行为。
+/// 桌面端的窗口与托盘行为（Windows 规范版）。
 ///
-/// * 关闭按钮：默认收进系统托盘（微信 / 钉钉 / OneDrive 的通行做法），
-///   设置里可以关掉（关掉后点关闭 = 真退出）；
-/// * 最小化按钮：同样收进托盘；
-/// * 托盘左键单击 = 恢复窗口；右键 = 菜单（打开 / 退出）；
-/// * 「退出」= 真正退出（先摘托盘图标，再销毁窗口）。
+/// * **最小化按钮 = 系统默认（进任务栏），不接管。**
+///   window_manager 0.5.x 没有 preventMinimize：`onWindowMinimize` 是窗口
+///   【已经最小化之后】的事后通知。在通知里再补 `hide()` 会造出
+///   "最小化 + 隐藏"叠加态 —— 恢复链必须同时解两层，错一层桌面就剩一块
+///   点不动的区域（本仓库曾出现过的故障形态）。系统默认最小化进任务栏，
+///   任务栏由系统管理、永不失灵，也是用户的肌肉记忆。
+/// * **关闭按钮 = 收进系统托盘**（[hideToTray] 开关，默认开；关掉后点关闭
+///   = 真退出）。隐藏就是一次 `hide()`（`SW_HIDE`）：
+///   - SW_HIDE 会**保留**最大化样式（Chrome 最小化再打开就是这个行为），
+///     恢复时 `maximize()` 原样带回 —— 所以隐藏前【不做】预防性 unmaximize，
+///     那会在屏幕上闪一次"从全屏缩回小窗"的还原动画，还附带一次焦点转移；
+///   - 也不做 setAlwaysOnTop 折腾：TOPMOST 是窗口样式，hide() 不会放大它，
+///     恢复链自有兜底。
+/// * **恢复**：show → (最小化则 restore) → (曾是最大化则 maximize) → focus。
+///   托盘单击是用户真实输入，自带前台授权（SetForegroundWindow 锁放行），
+///   focus() 一次即可；"置顶→立刻取消"抖动只在授权失效（键盘/脚本触发）
+///   没拿到前台时才作为兜底执行一次。
+/// * **历史教训（不许回潮）**：**绝对不要调 `windowManager.setSkipTaskbar()`**。
+///   window_manager 的 Windows 插件在这个方法里用构造期缓存的 `ITaskbarList*`；
+///   该指针没建起来时为 NULL，方法内没有判空，一调用就 `mov rax,[rcx]` 读
+///   NULL->vtable 直接访问违例（window_manager_plugin.dll+0xb2af，
+///   0xC0000005 进程级崩溃，Dart 侧 try/catch 拦不住）。hide() 之后任务栏
+///   按钮本来就会消失，这一步没有任何收益。
 ///
-/// 移动端没有"托盘"这个概念：[supported] 为 false，全部逻辑短路。
+/// 移动端没有"托盘"概念：[supported] 为 false，全部逻辑短路。
 class TrayController with TrayListener, WindowListener {
   TrayController({required this.appName, required this.hideToTray});
 
   /// 展示在托盘提示与菜单里的名字。
   final String appName;
 
-  /// 每次都现问：用户可能随时在设置里开关"收进托盘"。
+  /// 每次都现问：用户可能随时在设置里开关"关闭时收进托盘"。
   final bool Function() hideToTray;
 
   bool _started = false;
 
-  /// 隐藏窗口前它是不是最大化。最大化 + SW_HIDE 是这套问题的核心组合：
-  /// 最大化窗口被隐藏后，Windows 把它的还原状态记成 SW_SHOWMAXIMIZED，
-  /// 但重新显示时 SetForegroundWindow 又常被拒 —— 于是窗口既没真正回到
-  /// 前台、又占着"最大化全屏"的激活位置，桌面上就出现一层点不动的东西。
-  /// 所以隐藏前先还原成普通大小，恢复时再按这个标记还原回去。
+  /// 关闭收托盘那一刻窗口是否最大化。恢复时按它还原。
+  /// （SW_HIDE 保留最大化样式，但恢复链显式 maximize() 一次更稳，
+  /// 也把"曾经最大化过但恢复时已被用户改小"的窗口区分开。）
   bool _wasMaximized = false;
 
   /// 只有桌面平台才启用（本仓库只出 Windows 包，但 mac/linux 逻辑同构）。
@@ -75,20 +91,27 @@ class TrayController with TrayListener, WindowListener {
 
   // ------------------------------------------------------------- 窗口事件
 
+  /// 关闭按钮：收托盘或真退出。
+  ///
+  /// 隐藏前只**记录**最大化状态，不动窗口 —— 隐藏动作本身只有一次
+  /// `hide()`，不加任何前置窗口操作（见类注释）。
   @override
   void onWindowClose() async {
     if (hideToTray()) {
-      await _hideToTray();
+      try {
+        _wasMaximized = await windowManager.isMaximized();
+      } catch (_) {
+        _wasMaximized = false;
+      }
+      await windowManager.hide();
     } else {
       await _quit();
     }
   }
 
-  @override
-  void onWindowMinimize() async {
-    // "最小化到托盘"：把窗口收干净（SW_HIDE），想回来点托盘图标。
-    if (hideToTray()) await _hideToTray();
-  }
+  // 注意：故意没有 onWindowMinimize。
+  // 最小化按钮 = 系统默认 = 进任务栏；事后通知里再补 hide() 是
+  // "最小化+隐藏"叠加态的设计根源（见类注释），删干净。
 
   // ------------------------------------------------------------- 托盘事件
 
@@ -112,51 +135,12 @@ class TrayController with TrayListener, WindowListener {
     }
   }
 
-  /// 收进托盘（真正隐藏窗口）。
+  /// 从托盘恢复窗口。
   ///
-  /// 顺序很重要：
-  ///
-  /// 1. **先退出最大化**：`window_manager.hide()` 在 Windows 上就是
-  ///    `ShowWindow(SW_HIDE)`。如果藏起来的是最大化窗口，系统记下的还原
-  ///    状态是 `SW_SHOWMAXIMIZED`；下次显示时它自带"最大化 + 抢不回前台"，
-  ///    桌面就会剩一块点不动的区域。藏之前先还成普通大小，恢复后再按
-  ///    [_wasMaximized] 还原，避免这个组合。
-  /// 2. **再抹掉"始终置顶"**：TOPMOST 是窗口的附加样式，`hide()` 不会清它；
-  ///    带着样式隐藏、带着样式回来，就会压在别的窗口（含桌面）上面。
-  ///
-  /// 注意：**绝对不要调 `windowManager.setSkipTaskbar()`**。
-  /// window_manager 的 Windows 插件在这个方法里用的是构造期缓存的
-  /// `ITaskbarList*`；该指针没建起来时为 NULL，方法内又没有判空，于是
-  /// 一调用就 `mov rax,[rcx]` 读 NULL->vtable 直接访问违例
-  /// （window_manager_plugin.dll+0xb2af，异常码 0xC0000005）。
-  /// 这是进程级崩溃，Dart 侧的 try/catch 拦不住。窗口 `hide()` 之后任务栏
-  /// 按钮本来就会消失，不需要这一步。
-  Future<void> _hideToTray() async {
-    try {
-      if (await windowManager.isMaximized()) {
-        _wasMaximized = true;
-        await windowManager.unmaximize();
-      }
-    } catch (_) {}
-    try {
-      await windowManager.setAlwaysOnTop(false);
-    } catch (_) {}
-    await windowManager.hide();
-  }
-
-  /// 从托盘恢复窗口，并保证它**真正拿到前台激活**。
-  ///
-  /// 只 show() + focus() 在 Windows 上不可靠：被 hide() 隐藏过的窗口重新
-  /// 显示时，SetForegroundWindow 常常被系统拒绝（"非前台进程不能抢前台"），
-  /// 于是窗口虽然可见，鼠标点上去却像打在空气里、键盘也没反应 —— 只能点任务
-  /// 栏的「显示桌面」把别的窗口全最小化，或再点一次托盘图标，输入才恢复。
-  ///
-  /// 恢复顺序：
-  ///   显示 → 若最小化则还原 → 若藏之前是最大化则还原
-  ///   → 抢前台 → "置顶再立刻取消"强制置前 → 再抢一次前台。
-  ///
-  /// "置顶→取消"是 Win32 上通行的合法抢前台手法（置顶会强制把窗口置前，
-  /// 马上取消又不会让它一直压着别人）。
+  /// 顺序：显示 → 若最小化则还原 → 若收托盘前是最大化则还原最大化
+  /// → 抢前台。托盘单击带前台授权，focus() 一次就够；只有没拿到
+  /// 前台时才抖一次"置顶→取消"兜底（置顶会强制把窗口置前，马上取消
+  /// 又不会让它一直压着别人）。
   Future<void> _restore() async {
     await windowManager.show();
     try {
@@ -171,12 +155,14 @@ class TrayController with TrayListener, WindowListener {
       } catch (_) {}
     }
     await windowManager.focus();
+    // 兜底：前台授权失效（键盘/脚本触发）导致 focus 没生效时才抖。
     try {
-      await windowManager.setAlwaysOnTop(true);
-      await windowManager.setAlwaysOnTop(false);
+      if (!await windowManager.isFocused()) {
+        await windowManager.setAlwaysOnTop(true);
+        await windowManager.setAlwaysOnTop(false);
+        await windowManager.focus();
+      }
     } catch (_) {}
-    // 前面几次都可能被前台锁吞掉，最后再要一次焦点作为兜底。
-    await windowManager.focus();
   }
 
   Future<void> _quit() async {

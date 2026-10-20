@@ -132,7 +132,7 @@ class _SettingsPageState extends State<SettingsPage> {
               _card(context, <Widget>[
                 SwitchListTile(
                   title: const Text('关闭时收进系统托盘'),
-                  subtitle: const Text('点关闭 / 最小化时藏到托盘，不退出；托盘右键可以真正退出'),
+                  subtitle: const Text('点关闭时藏到托盘、不退出；最小化照常进任务栏；托盘右键可以真正退出'),
                   value: config.closeToTray,
                   onChanged: (bool value) {
                     setState(() => config.closeToTray = value);

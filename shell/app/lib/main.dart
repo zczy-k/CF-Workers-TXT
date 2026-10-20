@@ -14,7 +14,8 @@ Future<void> main() async {
   final Branding branding = await loadBranding();
   final ShellState state = await ShellState.create(branding);
 
-  // 桌面端：关闭/最小化收进系统托盘（移动端没有托盘，supported 为 false 直接跳过）
+  // 桌面端：关闭按钮收进系统托盘（最小化按钮走系统默认进任务栏，不接管；
+  // 移动端没有托盘，supported 为 false 直接跳过）
   if (TrayController.supported) {
     final TrayController tray = TrayController(
       appName: branding.appName,
