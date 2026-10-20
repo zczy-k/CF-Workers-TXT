@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'local_secure_store.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:webshell_core/webshell_core.dart';
 
@@ -40,7 +40,7 @@ class ShellState extends ChangeNotifier {
   final ConfigFile configFile;
   final DownloadManager downloads;
   final IconFetcher icons;
-  final FlutterSecureStorage secure;
+  final LocalSecureStore secure;
   final File downloadsFile;
 
   /// 引擎的真实 UA（向 WebView 问来的）。下载时带上它，站点才不会把我们当爬虫。
@@ -65,6 +65,11 @@ class ShellState extends ChangeNotifier {
       // 首次启动：探测默认下载目录（Android 是公共 Download/<App 名文件夹>，
       // 中文名取拼音首字母，如「成都」→ Download/cd），结果写进配置，
       // 下载时不再反复探测。
+      config.downloadDir = await defaultDownloadDirectory(branding.appName);
+      configFile.save(config);
+    } else if (portableMode && !isInPortableRoot(config.downloadDir!)) {
+      // 便携版：老配置里的下载目录还指向 C 盘（用户的「下载」文件夹），
+      // 统一挪到程序目录里的 data-user\Download，跟其它数据一起搬走。
       config.downloadDir = await defaultDownloadDirectory(branding.appName);
       configFile.save(config);
     } else if (Platform.isAndroid) {
@@ -99,7 +104,9 @@ class ShellState extends ChangeNotifier {
       configFile: configFile,
       downloads: downloads,
       icons: IconFetcher(await iconCacheDir()),
-      secure: const FlutterSecureStorage(),
+      // 密码改存程序目录里的 secrets.bin，不用 flutter_secure_storage ——
+      // 后者在 Windows 上固定落 %APPDATA%，迁移时会漏掉（详见 local_secure_store.dart）。
+      secure: LocalSecureStore(File(joinPath(dir.path, 'secrets.bin'))),
       downloadsFile: File(joinPath(dir.path, 'downloads.json')),
     );
     downloads.onChanged = (DownloadTask task) => state._onDownloadsChanged();
@@ -148,7 +155,7 @@ class ShellState extends ChangeNotifier {
       configFile: ConfigFile(configFile),
       downloads: downloads,
       icons: icons ?? IconFetcher(Directory.systemTemp),
-      secure: const FlutterSecureStorage(),
+      secure: LocalSecureStore(File(joinPath(downloadsFile.parent.path, 'secrets.bin'))),
       downloadsFile: downloadsFile,
     );
     downloads.onChanged = (DownloadTask task) => state._onDownloadsChanged();

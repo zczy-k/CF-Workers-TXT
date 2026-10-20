@@ -2,9 +2,11 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart' show ByteData, rootBundle;
-import 'package:path_provider/path_provider.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:webshell_core/webshell_core.dart';
+
+import '../paths.dart';
 
 /// 桌面端的窗口与托盘行为。
 ///
@@ -26,6 +28,13 @@ class TrayController with TrayListener, WindowListener {
 
   bool _started = false;
 
+  /// 隐藏窗口前它是不是最大化。最大化 + SW_HIDE 是这套问题的核心组合：
+  /// 最大化窗口被隐藏后，Windows 把它的还原状态记成 SW_SHOWMAXIMIZED，
+  /// 但重新显示时 SetForegroundWindow 又常被拒 —— 于是窗口既没真正回到
+  /// 前台、又占着"最大化全屏"的激活位置，桌面上就出现一层点不动的东西。
+  /// 所以隐藏前先还原成普通大小，恢复时再按这个标记还原回去。
+  bool _wasMaximized = false;
+
   /// 只有桌面平台才启用（本仓库只出 Windows 包，但 mac/linux 逻辑同构）。
   static bool get supported =>
       !kIsWeb &&
@@ -40,12 +49,13 @@ class TrayController with TrayListener, WindowListener {
     windowManager.addListener(this);
     trayManager.addListener(this);
 
-    // tray_manager 只吃磁盘路径：把 assets 里的图标解到临时目录再用。
+    // tray_manager 只吃磁盘路径：把 assets 里的图标解到数据目录再用。
+    // 用 appDataDir() 而不是系统临时目录 —— 便携版下所有运行数据都在程序目录，
+    // 连这个解出来的图标也一样，C 盘不留东西。
     try {
       final ByteData data = await rootBundle.load('assets/tray_icon.ico');
-      final Directory tmp = await getTemporaryDirectory();
-      final File icon =
-          File('${tmp.path}${Platform.pathSeparator}webshell_tray.ico');
+      final Directory dir = await appDataDir();
+      final File icon = File(joinPath(dir.path, 'webshell_tray.ico'));
       await icon.writeAsBytes(
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
         flush: true,
@@ -104,13 +114,30 @@ class TrayController with TrayListener, WindowListener {
 
   /// 收进托盘（真正隐藏窗口）。
   ///
-  /// 隐藏前先把"始终置顶"抹掉：window_manager 的 hide() 在 Windows 上就是
-  /// ShowWindow(SW_HIDE)，如果隐藏时窗口还挂着 TOPMOST 这个附加样式，重新
-  /// 显示后它会带着样式回来，压在别的窗口（包括桌面）上面 —— 表现就是
-  /// "桌面上有一层看不见/点不动的东西"。隐藏前清掉，恢复后就是普通窗口。
+  /// 顺序很重要，两步都不能省：
+  ///
+  /// 1. **先退出最大化**：`window_manager.hide()` 在 Windows 上就是
+  ///    `ShowWindow(SW_HIDE)`。如果藏起来的是最大化窗口，系统记下的还原
+  ///    状态是 `SW_SHOWMAXIMIZED`；下次显示时它自带"最大化 + 抢不回前台"，
+  ///    桌面就会剩一块点不动的区域。藏之前先还成普通大小，恢复后再按
+  ///    [_wasMaximized] 还原，避免这个组合。
+  /// 2. **再抹掉"始终置顶"**：TOPMOST 是窗口的附加样式，`hide()` 不会清它；
+  ///    带着样式隐藏、带着样式回来，就会压在别的窗口（含桌面）上面。
+  ///
+  /// 最后补一个 `setSkipTaskbar(true)`：把任务栏按钮也收掉，回来时再重建
+  /// （用户看到的效果是"最小化到托盘"，任务栏里干净）。
   Future<void> _hideToTray() async {
     try {
+      if (await windowManager.isMaximized()) {
+        _wasMaximized = true;
+        await windowManager.unmaximize();
+      }
+    } catch (_) {}
+    try {
       await windowManager.setAlwaysOnTop(false);
+    } catch (_) {}
+    try {
+      await windowManager.setSkipTaskbar(true);
     } catch (_) {}
     await windowManager.hide();
   }
@@ -122,21 +149,35 @@ class TrayController with TrayListener, WindowListener {
   /// 于是窗口虽然可见，鼠标点上去却像打在空气里、键盘也没反应 —— 只能点任务
   /// 栏的「显示桌面」把别的窗口全最小化，或再点一次托盘图标，输入才恢复。
   ///
-  /// 这里的顺序：显示 → 若被最小化则还原 → 抢前台 → 置顶再立刻取消。
+  /// 恢复顺序：
+  ///   显示 → 重建任务栏按钮 → 若最小化则还原 → 若藏之前是最大化则还原
+  ///   → 抢前台 → "置顶再立刻取消"强制置前 → 再抢一次前台。
+  ///
   /// "置顶→取消"是 Win32 上通行的合法抢前台手法（置顶会强制把窗口置前，
-  /// 马上取消又不会让它一直压着别人），能让刚恢复的窗口真正成为前台窗口。
+  /// 马上取消又不会让它一直压着别人）。
   Future<void> _restore() async {
     await windowManager.show();
+    try {
+      await windowManager.setSkipTaskbar(false);
+    } catch (_) {}
     try {
       if (await windowManager.isMinimized()) {
         await windowManager.restore();
       }
     } catch (_) {}
+    if (_wasMaximized) {
+      _wasMaximized = false;
+      try {
+        await windowManager.maximize();
+      } catch (_) {}
+    }
     await windowManager.focus();
     try {
       await windowManager.setAlwaysOnTop(true);
       await windowManager.setAlwaysOnTop(false);
     } catch (_) {}
+    // 前面几次都可能被前台锁吞掉，最后再要一次焦点作为兜底。
+    await windowManager.focus();
   }
 
   Future<void> _quit() async {

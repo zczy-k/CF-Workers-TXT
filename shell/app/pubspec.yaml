@@ -30,8 +30,9 @@ dependencies:
   flutter_file_dialog: ^3.3.3
   # Android：用系统程序打开下载好的文件
   open_filex: ^5.0.0
-  # Basic Auth 的密码：进系统安全存储（Keystore / DPAPI），绝不写进配置文件
-  flutter_secure_storage: ^11.2.0
+  # Basic Auth 的密码：走本地 secrets.bin（随数据目录一起迁移，见 lib/src/local_secure_store.dart），
+  # 不再依赖 flutter_secure_storage（它在 Windows 上固定写 %APPDATA%，迁移会漏）
+  
   # 桌面端窗口行为：拦截关闭/最小化按钮（配合下面的托盘收进去）
   window_manager: ^0.5.2
   # 桌面端系统托盘：图标 + 右键菜单（打开 / 退出）
