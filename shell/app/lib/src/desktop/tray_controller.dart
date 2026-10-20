@@ -86,7 +86,7 @@ class TrayController with TrayListener, WindowListener {
 
   @override
   void onWindowMinimize() async {
-    // "最小化到托盘"：任务栏里也不留（收干净），想回来点托盘图标。
+    // "最小化到托盘"：把窗口收干净（SW_HIDE），想回来点托盘图标。
     if (hideToTray()) await _hideToTray();
   }
 
@@ -114,7 +114,7 @@ class TrayController with TrayListener, WindowListener {
 
   /// 收进托盘（真正隐藏窗口）。
   ///
-  /// 顺序很重要，两步都不能省：
+  /// 顺序很重要：
   ///
   /// 1. **先退出最大化**：`window_manager.hide()` 在 Windows 上就是
   ///    `ShowWindow(SW_HIDE)`。如果藏起来的是最大化窗口，系统记下的还原
@@ -124,8 +124,13 @@ class TrayController with TrayListener, WindowListener {
   /// 2. **再抹掉"始终置顶"**：TOPMOST 是窗口的附加样式，`hide()` 不会清它；
   ///    带着样式隐藏、带着样式回来，就会压在别的窗口（含桌面）上面。
   ///
-  /// 最后补一个 `setSkipTaskbar(true)`：把任务栏按钮也收掉，回来时再重建
-  /// （用户看到的效果是"最小化到托盘"，任务栏里干净）。
+  /// 注意：**绝对不要调 `windowManager.setSkipTaskbar()`**。
+  /// window_manager 的 Windows 插件在这个方法里用的是构造期缓存的
+  /// `ITaskbarList*`；该指针没建起来时为 NULL，方法内又没有判空，于是
+  /// 一调用就 `mov rax,[rcx]` 读 NULL->vtable 直接访问违例
+  /// （window_manager_plugin.dll+0xb2af，异常码 0xC0000005）。
+  /// 这是进程级崩溃，Dart 侧的 try/catch 拦不住。窗口 `hide()` 之后任务栏
+  /// 按钮本来就会消失，不需要这一步。
   Future<void> _hideToTray() async {
     try {
       if (await windowManager.isMaximized()) {
@@ -135,9 +140,6 @@ class TrayController with TrayListener, WindowListener {
     } catch (_) {}
     try {
       await windowManager.setAlwaysOnTop(false);
-    } catch (_) {}
-    try {
-      await windowManager.setSkipTaskbar(true);
     } catch (_) {}
     await windowManager.hide();
   }
@@ -150,16 +152,13 @@ class TrayController with TrayListener, WindowListener {
   /// 栏的「显示桌面」把别的窗口全最小化，或再点一次托盘图标，输入才恢复。
   ///
   /// 恢复顺序：
-  ///   显示 → 重建任务栏按钮 → 若最小化则还原 → 若藏之前是最大化则还原
+  ///   显示 → 若最小化则还原 → 若藏之前是最大化则还原
   ///   → 抢前台 → "置顶再立刻取消"强制置前 → 再抢一次前台。
   ///
   /// "置顶→取消"是 Win32 上通行的合法抢前台手法（置顶会强制把窗口置前，
   /// 马上取消又不会让它一直压着别人）。
   Future<void> _restore() async {
     await windowManager.show();
-    try {
-      await windowManager.setSkipTaskbar(false);
-    } catch (_) {}
     try {
       if (await windowManager.isMinimized()) {
         await windowManager.restore();
