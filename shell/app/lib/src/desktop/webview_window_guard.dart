@@ -103,6 +103,21 @@ typedef _GetWindowRectNative = Int32 Function(
 );
 typedef _GetWindowRectDart = int Function(int hwnd, Pointer<_Rect> rect);
 
+typedef _GetClientRectNative = Int32 Function(
+  IntPtr hwnd,
+  Pointer<_Rect> rect,
+);
+typedef _GetClientRectDart = int Function(int hwnd, Pointer<_Rect> rect);
+
+typedef _ClientToScreenNative = Int32 Function(
+  IntPtr hwnd,
+  Pointer<_Point> pt,
+);
+typedef _ClientToScreenDart = int Function(int hwnd, Pointer<_Point> pt);
+
+typedef _GetWindowLongNative = Int32 Function(IntPtr hwnd, Int32 index);
+typedef _GetWindowLongDart = int Function(int hwnd, int index);
+
 typedef _SetWindowPosNative = Int32 Function(
   IntPtr hwnd,
   IntPtr hwndInsertAfter,
@@ -135,6 +150,15 @@ final class _Rect extends Struct {
 
   @Int32()
   external int bottom;
+}
+
+/// Win32 POINT（ClientToScreen 出入参）。
+final class _Point extends Struct {
+  @Int32()
+  external int x;
+
+  @Int32()
+  external int y;
 }
 
 /// Flutter Windows 宿主窗口类名（模板固定值），找宿主 HWND 用。
@@ -176,6 +200,9 @@ class WebViewWindowGuard {
   static const int _swpAsyncWindowPos = 0x4000; // SWP_ASYNCWINDOWPOS
   static const int _swpNoActivate = 0x0010; // SWP_NOACTIVATE
   static const int _swpNoZOrder = 0x0004; // SWP_NOZORDER
+  static const int _gwlStyle = -16; // GWL_STYLE
+  static const int _wsPopup = 0x80000000; // WS_POPUP
+  static const int _wsCaption = 0x00C00000; // WS_CAPTION（DevTools 等带边框窗）
 
   /// 我们亲手藏起来的句柄。恢复时只放行这份名单。
   final List<int> _sweptHandles = <int>[];
@@ -241,6 +268,21 @@ class WebViewWindowGuard {
     'GetWindowRect',
   );
 
+  late final _GetClientRectDart _getClientRect = _user32
+      .lookupFunction<_GetClientRectNative, _GetClientRectDart>(
+    'GetClientRect',
+  );
+
+  late final _ClientToScreenDart _clientToScreen = _user32
+      .lookupFunction<_ClientToScreenNative, _ClientToScreenDart>(
+    'ClientToScreen',
+  );
+
+  late final _GetWindowLongDart _getWindowLongW = _user32
+      .lookupFunction<_GetWindowLongNative, _GetWindowLongDart>(
+    'GetWindowLongW',
+  );
+
   late final _SetWindowPosDart _setWindowPos = _user32
       .lookupFunction<_SetWindowPosNative, _SetWindowPosDart>('SetWindowPos');
 
@@ -297,19 +339,29 @@ class WebViewWindowGuard {
   }
 
   /// 宿主窗口 rect 变化（拖动/缩放/最大化/还原）后的**对账**：
-  /// 把完全落在宿主窗口矩形之外的可见 WebView2 弹窗挪回宿主当前矩形。
+  /// 把没**精确对齐**宿主客户区的内容弹窗摆回宿主客户区原位。
   ///
   /// **为什么需要它**：hide/show 清扫只覆盖"宿主不可见→恢复"（收托盘/
   /// 最小化）；而**最大化→还原全程宿主可见**，谁也没动弹窗。插件自己
-  /// 的位置同步链在这条路径上会失灵：宿主已缩回小窗，弹窗却留在最大化
-  /// 时的旧矩形上 —— 旧矩形内（宿主窗口之外的部分）点击被它静默吞掉，
-  /// 用户看到的就是"窗口缩小了，但旁边一大块红框区域点不动"。
+  /// 的位置同步链在这条路径上会失灵：宿主已缩回小窗，弹窗却停在最大化
+  /// 时的旧矩形上 —— 旧矩形与宿主**部分相交**（比如右对齐、左边多出
+  /// 一截）时，多出来的那一块照样吞点击（用户实测："还原后左边一条区
+  /// 域点不动"）。所以判定不能是"完全无交集"，必须是**精确对齐**：
   ///
-  /// 判定保守：**完全无交集**才算错位（正常同步的弹窗必然与宿主相交，
-  /// 因为 InAppWebView 布局在窗口内），误伤为零。挪动用
-  /// `SWP_ASYNCWINDOWPOS` 投递不等回执，WebView2 正忙也不阻塞宿主；
-  /// `SWP_NOZORDER|SWP_NOACTIVATE` 保证只挪矩形不动 Z 序/不抢焦点。
-  /// 挪动这一下本身也常能惊动 WebView2 重新走它自己的同步。
+  /// * **基准** = 宿主**客户区**的屏幕矩形（GetClientRect + ClientToScreen）。
+  ///   内容弹窗就该严丝合缝盖在客户区上 —— 它的窗口矩形与客户区矩形
+  ///   任何一边有偏差（≥1px）都判错位，SetWindowPos 摆回去。
+  /// * **只碰真正的"内容窗"**，三个指纹同时满足才动手（防误挪）：
+  ///   a. 可见；（隐藏态归 hideOrphaned/showSwept 管）
+  ///   b. 无 `WS_CAPTION`（DevTools/独立新窗带标题栏，插件合法地让它们
+  ///      自由摆放，绝不能被拖走）；
+  ///   c. 边长 ≥ 宿主客户区的 80%（右键菜单/下拉/气泡这类小弹窗允许
+  ///      临时漂在别处，那是页面的正常 UI）。
+  /// * 挪动用 `SWP_ASYNCWINDOWPOS` 投递不等回执，WebView2 正忙也不
+  ///   阻塞宿主；`SWP_NOZORDER|SWP_NOACTIVATE` 只挪矩形不动 Z 序/不抢
+  ///   焦点。摆位这一下本身也常能惊动 WebView2 重走它自己的同步链。
+  ///
+  /// 对账幂等：位置本来就对齐的弹窗不满足"有偏差"条件，零动作。
   void resyncToHost() {
     if (!Platform.isWindows) return;
     try {
@@ -318,34 +370,52 @@ class WebViewWindowGuard {
       // 最小化/收托盘态不对账（此时宿主 rect 是 -32000 系的无效值），
       // 那两条路走 hideOrphaned/showSwept。
       if (_isWindowVisible(host) == 0) return;
-      final Pointer<_Rect> hostRect = calloc<_Rect>();
+      final Pointer<_Rect> hostClient = calloc<_Rect>();
       final Pointer<_Rect> wvRect = calloc<_Rect>();
+      final Pointer<_Point> pt = calloc<_Point>();
       try {
-        if (_getWindowRect(host, hostRect) == 0) return;
-        final int hw = hostRect.ref.right - hostRect.ref.left;
-        final int hh = hostRect.ref.bottom - hostRect.ref.top;
-        if (hw <= 0 || hh <= 0) return;
+        if (_getClientRect(host, hostClient) == 0) return;
+        final int cw = hostClient.ref.right - hostClient.ref.left;
+        final int ch = hostClient.ref.bottom - hostClient.ref.top;
+        if (cw <= 0 || ch <= 0) return;
+        pt.ref.x = 0;
+        pt.ref.y = 0;
+        if (_clientToScreen(host, pt) == 0) return;
+        final int targetX = pt.ref.x;
+        final int targetY = pt.ref.y;
+
         for (final int hwnd in _findVisibleWebviewWindows()) {
           if (_getWindowRect(hwnd, wvRect) == 0) continue;
-          final bool disjoint =
-              wvRect.ref.right <= hostRect.ref.left ||
-              wvRect.ref.left >= hostRect.ref.right ||
-              wvRect.ref.bottom <= hostRect.ref.top ||
-              wvRect.ref.top >= hostRect.ref.bottom;
-          if (!disjoint) continue;
+          final int wvW = wvRect.ref.right - wvRect.ref.left;
+          final int wvH = wvRect.ref.bottom - wvRect.ref.top;
+          if (wvW <= 0 || wvH <= 0) continue;
+          // 指纹 b：带标题栏的（DevTools 等）不碰；且必须是 WS_POPUP
+          // 边框窗（内容窗的标准样式，类注释有实测记录）。
+          final int style = _getWindowLongW(hwnd, _gwlStyle);
+          if ((style & _wsCaption) != 0) continue;
+          if ((style & _wsPopup) == 0) continue;
+          // 指纹 c：小弹窗（菜单/下拉/气泡）允许自由摆放。
+          if (wvW < cw * 4 ~/ 5 || wvH < ch * 4 ~/ 5) continue;
+          // 精确对齐判定：任何一边偏差 ≥1px 就摆回客户区原位。
+          final bool aligned = wvRect.ref.left == targetX &&
+              wvRect.ref.top == targetY &&
+              wvW == cw &&
+              wvH == ch;
+          if (aligned) continue;
           _setWindowPos(
             hwnd,
             0,
-            hostRect.ref.left,
-            hostRect.ref.top,
-            hw,
-            hh,
+            targetX,
+            targetY,
+            cw,
+            ch,
             _swpAsyncWindowPos | _swpNoActivate | _swpNoZOrder,
           );
         }
       } finally {
-        calloc.free(hostRect);
+        calloc.free(hostClient);
         calloc.free(wvRect);
+        calloc.free(pt);
       }
     } catch (_) {
       // 对账失败不影响任何主流程 —— 大不了维持原故障形态，不崩。
