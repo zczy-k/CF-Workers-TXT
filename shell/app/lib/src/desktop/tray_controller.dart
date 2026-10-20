@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:webshell_core/webshell_core.dart';
 
 import '../paths.dart';
+import 'webview_window_guard.dart';
 
 /// 桌面端的窗口与托盘行为（Windows 规范版）。
 ///
@@ -27,6 +28,13 @@ import '../paths.dart';
 ///   托盘单击是用户真实输入，自带前台授权（SetForegroundWindow 锁放行），
 ///   focus() 一次即可；"置顶→立刻取消"抖动只在授权失效（键盘/脚本触发）
 ///   没拿到前台时才作为兜底执行一次。
+/// * **WebView2 残留窗清扫（Windows 专项，[WebViewWindowGuard]）**：
+///   flutter_inappwebview 的内容窗是 `msedgewebview2.exe` 名下的独立顶层
+///   LAYERED 弹窗（`Chrome_WidgetWin_1`），跟宿主窗口没有父子/属主关系 ——
+///   宿主最小化或 hide 时它**不跟着走**，残留在原处；它对 `WM_NCHITTEST`
+///   恒回 `HTNOWHERE`，覆盖区域的鼠标点击被**静默吞掉**（最大化后收托盘
+///   = 整个桌面点不动即由此而来）。所以：所有让宿主不可见的路径补一次
+///   `hideOrphaned()`，所有让宿主重新可见的路径补一次 `showSwept()`。
 /// * **历史教训（不许回潮）**：**绝对不要调 `windowManager.setSkipTaskbar()`**。
 ///   window_manager 的 Windows 插件在这个方法里用构造期缓存的 `ITaskbarList*`；
 ///   该指针没建起来时为 NULL，方法内没有判空，一调用就 `mov rax,[rcx]` 读
@@ -94,7 +102,8 @@ class TrayController with TrayListener, WindowListener {
   /// 关闭按钮：收托盘或真退出。
   ///
   /// 隐藏前只**记录**最大化状态，不动窗口 —— 隐藏动作本身只有一次
-  /// `hide()`，不加任何前置窗口操作（见类注释）。
+  /// `hide()`，不加任何前置窗口操作（见类注释）。hide() 之后立刻清掉
+  /// WebView2 残留窗，否则它会留在桌面吞点击。
   @override
   void onWindowClose() async {
     if (hideToTray()) {
@@ -104,14 +113,35 @@ class TrayController with TrayListener, WindowListener {
         _wasMaximized = false;
       }
       await windowManager.hide();
+      // WebView2 的内容窗是独立顶层弹窗，不会跟着宿主隐藏 —— 不清掉它
+      // 就残留在桌面吞点击（见 WebViewWindowGuard 类注释）。
+      WebViewWindowGuard.instance.hideOrphaned();
     } else {
       await _quit();
     }
   }
 
-  // 注意：故意没有 onWindowMinimize。
-  // 最小化按钮 = 系统默认 = 进任务栏；事后通知里再补 hide() 是
-  // "最小化+隐藏"叠加态的设计根源（见类注释），删干净。
+  /// 最小化按钮仍是**系统默认**（进任务栏），这里绝不碰宿主窗口一根毫毛；
+  /// 只清 WebView2 残留窗 —— 最小化时它同样会留在原区域吞点击。
+  /// （别把"事后通知里补 hide()"加回来：那才是"最小化+隐藏"叠加态的
+  /// 设计根源，见类注释。）
+  @override
+  void onWindowMinimize() {
+    WebViewWindowGuard.instance.hideOrphaned();
+  }
+
+  /// 任务栏还原（从最小化回来）：把清掉的 WebView2 窗放回来。
+  @override
+  void onWindowRestore() {
+    WebViewWindowGuard.instance.showSwept();
+  }
+
+  /// 焦点兜底：万一 restore 事件因插件时序没到，窗口拿到焦点时也一定
+  /// 已经可见 —— 这时补放一次（名单已清空时是空操作，零成本）。
+  @override
+  void onWindowFocus() {
+    WebViewWindowGuard.instance.showSwept();
+  }
 
   // ------------------------------------------------------------- 托盘事件
 
@@ -138,8 +168,8 @@ class TrayController with TrayListener, WindowListener {
   /// 从托盘恢复窗口。
   ///
   /// 顺序：显示 → 若最小化则还原 → 若收托盘前是最大化则还原最大化
-  /// → 抢前台。托盘单击带前台授权，focus() 一次就够；只有没拿到
-  /// 前台时才抖一次"置顶→取消"兜底（置顶会强制把窗口置前，马上取消
+  /// → 补放 WebView2 残留窗 → 抢前台。托盘单击带前台授权，focus() 一次就够；
+  /// 只有没拿到前台时才抖一次"置顶→取消"兜底（置顶会强制把窗口置前，马上取消
   /// 又不会让它一直压着别人）。
   Future<void> _restore() async {
     await windowManager.show();
@@ -154,6 +184,8 @@ class TrayController with TrayListener, WindowListener {
         await windowManager.maximize();
       } catch (_) {}
     }
+    // 宿主已可见：把收托盘/最小化时清掉的 WebView2 窗放回来。
+    WebViewWindowGuard.instance.showSwept();
     await windowManager.focus();
     // 兜底：前台授权失效（键盘/脚本触发）导致 focus 没生效时才抖。
     try {
@@ -166,6 +198,8 @@ class TrayController with TrayListener, WindowListener {
   }
 
   Future<void> _quit() async {
+    // 退出前再清一次：进程树销毁前那几秒，别让残留窗继续吃桌面点击。
+    WebViewWindowGuard.instance.hideOrphaned();
     try {
       await trayManager.destroy();
     } catch (_) {

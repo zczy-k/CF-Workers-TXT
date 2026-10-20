@@ -30,6 +30,10 @@ dependencies:
   flutter_file_dialog: ^3.3.3
   # Android：用系统程序打开下载好的文件
   open_filex: ^5.0.0
+
+  # Win32 FFI：桌面端清理 WebView2 残留顶层窗（见
+  # lib/src/desktop/webview_window_guard.dart），直接调 user32/kernel32。
+  ffi: ^2.1.0
   # Basic Auth 的密码：走本地 secrets.bin（随数据目录一起迁移，见 lib/src/local_secure_store.dart），
   # 不再依赖 flutter_secure_storage（它在 Windows 上固定写 %APPDATA%，迁移会漏）
   
