@@ -104,10 +104,10 @@ class TrayController with TrayListener, WindowListener {
   }
 
   @override
-  void onTrayMenuItemClick(MenuItem item) async {
-    if (item.key == 'show') {
+  void onTrayMenuItemClick(MenuItem menuItem) async {
+    if (menuItem.key == 'show') {
       await _restore();
-    } else if (item.key == 'quit') {
+    } else if (menuItem.key == 'quit') {
       await _quit();
     }
   }
