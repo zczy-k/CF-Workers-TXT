@@ -22,6 +22,100 @@ import 'package:ffi/ffi.dart';
 /// 窗口枚举沿用 WebViewWindowGuard 的桌面子链遍历（不碰 EnumWindows
 /// 回调的 FFI 坑），匹配条件：类名 `FLUTTER_RUNNER_WIN32_WINDOW` +
 /// 标题 == 本包名 + 属于别的进程。
+/// 窗口类名前缀：Flutter Windows 模板固定值。
+const String _flutterWindowClass = 'FLUTTER_RUNNER_WIN32_WINDOW';
+
+// --------------------------------------------------------------- 原生签名
+// typedef 必须在顶层：Dart 语言规则不允许在类体内声明 typedef
+// （CI 的 flutter analyze 报 typedef_in_class error，连续三个提交
+// 因此构建失败 —— 单实例/退出提速/UI 重建三批修复都没进产物）。
+
+typedef _CreateMutexWNative = IntPtr Function(
+  Pointer<Void> attrs,
+  Uint32 initialOwner,
+  Pointer<Uint16> name,
+);
+typedef _CreateMutexWDart = int Function(
+  Pointer<Void> attrs,
+  int initialOwner,
+  Pointer<Uint16> name,
+);
+
+typedef _GetLastErrorNative = Uint32 Function();
+typedef _GetLastErrorDart = int Function();
+
+typedef _GetWindowNative = IntPtr Function(IntPtr hwnd, Uint32 cmd);
+typedef _GetWindowDart = int Function(int hwnd, int cmd);
+
+typedef _GetDesktopWindowNative = IntPtr Function();
+typedef _GetDesktopWindowDart = int Function();
+
+typedef _GetClassNameWNative = Int32 Function(
+  IntPtr hwnd,
+  Pointer<Uint16> buf,
+  Int32 maxCount,
+);
+typedef _GetClassNameWDart = int Function(
+  int hwnd,
+  Pointer<Uint16> buf,
+  int maxCount,
+);
+
+typedef _GetWindowTextWNative = Int32 Function(
+  IntPtr hwnd,
+  Pointer<Uint16> buf,
+  Int32 maxCount,
+);
+typedef _GetWindowTextWDart = int Function(
+  int hwnd,
+  Pointer<Uint16> buf,
+  int maxCount,
+);
+
+typedef _GetWindowThreadProcessIdNative = Uint32 Function(
+  IntPtr hwnd,
+  Pointer<Uint32> pid,
+);
+typedef _GetWindowThreadProcessIdDart = int Function(
+  int hwnd,
+  Pointer<Uint32> pid,
+);
+
+typedef _GetCurrentProcessIdNative = Uint32 Function();
+typedef _GetCurrentProcessIdDart = int Function();
+
+typedef _ShowWindowAsyncNative = Int32 Function(IntPtr hwnd, Int32 cmd);
+typedef _ShowWindowAsyncDart = int Function(int hwnd, int cmd);
+
+typedef _SetForegroundWindowNative = Int32 Function(IntPtr hwnd);
+typedef _SetForegroundWindowDart = int Function(int hwnd);
+
+typedef _KeybdEventNative = Void Function(
+  Uint8 vk,
+  Uint8 scan,
+  Uint32 flags,
+  IntPtr extraInfo,
+);
+typedef _KeybdEventDart = void Function(
+  int vk,
+  int scan,
+  int flags,
+  int extraInfo,
+);
+
+typedef _MessageBoxWNative = Int32 Function(
+  IntPtr hwnd,
+  Pointer<Uint16> text,
+  Pointer<Uint16> caption,
+  Uint32 type,
+);
+typedef _MessageBoxWDart = int Function(
+  int hwnd,
+  Pointer<Uint16> text,
+  Pointer<Uint16> caption,
+  int type,
+);
+
 class SingleInstanceGuard {
   SingleInstanceGuard._();
 
@@ -37,97 +131,6 @@ class SingleInstanceGuard {
   static const int _mbIconInformation = 0x40;
   static const int _gwChild = 5; // GW_CHILD
   static const int _gwHwndNext = 2; // GW_HWNDNEXT
-
-  /// 窗口类名前缀：Flutter Windows 模板固定值。
-  static const String _flutterWindowClass = 'FLUTTER_RUNNER_WIN32_WINDOW';
-
-  // --------------------------------------------------------------- 原生签名
-
-  typedef _CreateMutexWNative = IntPtr Function(
-    Pointer<Void> attrs,
-    Uint32 initialOwner,
-    Pointer<Uint16> name,
-  );
-  typedef _CreateMutexWDart = int Function(
-    Pointer<Void> attrs,
-    int initialOwner,
-    Pointer<Uint16> name,
-  );
-
-  typedef _GetLastErrorNative = Uint32 Function();
-  typedef _GetLastErrorDart = int Function();
-
-  typedef _GetWindowNative = IntPtr Function(IntPtr hwnd, Uint32 cmd);
-  typedef _GetWindowDart = int Function(int hwnd, int cmd);
-
-  typedef _GetDesktopWindowNative = IntPtr Function();
-  typedef _GetDesktopWindowDart = int Function();
-
-  typedef _GetClassNameWNative = Int32 Function(
-    IntPtr hwnd,
-    Pointer<Uint16> buf,
-    Int32 maxCount,
-  );
-  typedef _GetClassNameWDart = int Function(
-    int hwnd,
-    Pointer<Uint16> buf,
-    int maxCount,
-  );
-
-  typedef _GetWindowTextWNative = Int32 Function(
-    IntPtr hwnd,
-    Pointer<Uint16> buf,
-    Int32 maxCount,
-  );
-  typedef _GetWindowTextWDart = int Function(
-    int hwnd,
-    Pointer<Uint16> buf,
-    int maxCount,
-  );
-
-  typedef _GetWindowThreadProcessIdNative = Uint32 Function(
-    IntPtr hwnd,
-    Pointer<Uint32> pid,
-  );
-  typedef _GetWindowThreadProcessIdDart = int Function(
-    int hwnd,
-    Pointer<Uint32> pid,
-  );
-
-  typedef _GetCurrentProcessIdNative = Uint32 Function();
-  typedef _GetCurrentProcessIdDart = int Function();
-
-  typedef _ShowWindowAsyncNative = Int32 Function(IntPtr hwnd, Int32 cmd);
-  typedef _ShowWindowAsyncDart = int Function(int hwnd, int cmd);
-
-  typedef _SetForegroundWindowNative = Int32 Function(IntPtr hwnd);
-  typedef _SetForegroundWindowDart = int Function(int hwnd);
-
-  typedef _KeybdEventNative = Void Function(
-    Uint8 vk,
-    Uint8 scan,
-    Uint32 flags,
-    IntPtr extraInfo,
-  );
-  typedef _KeybdEventDart = void Function(
-    int vk,
-    int scan,
-    int flags,
-    int extraInfo,
-  );
-
-  typedef _MessageBoxWNative = Int32 Function(
-    IntPtr hwnd,
-    Pointer<Uint16> text,
-    Pointer<Uint16> caption,
-    Uint32 type,
-  );
-  typedef _MessageBoxWDart = int Function(
-    int hwnd,
-    Pointer<Uint16> text,
-    Pointer<Uint16> caption,
-    int type,
-  );
 
   DynamicLibrary? _user32Lib;
   DynamicLibrary get _user32 => _user32Lib ??= DynamicLibrary.open('user32.dll');
