@@ -97,6 +97,49 @@ typedef _Process32WDart = int Function(
 typedef _CloseHandleNative = Int32 Function(IntPtr handle);
 typedef _CloseHandleDart = int Function(int handle);
 
+typedef _GetWindowRectNative = Int32 Function(
+  IntPtr hwnd,
+  Pointer<_Rect> rect,
+);
+typedef _GetWindowRectDart = int Function(int hwnd, Pointer<_Rect> rect);
+
+typedef _SetWindowPosNative = Int32 Function(
+  IntPtr hwnd,
+  IntPtr hwndInsertAfter,
+  Int32 x,
+  Int32 y,
+  Int32 cx,
+  Int32 cy,
+  Uint32 flags,
+);
+typedef _SetWindowPosDart = int Function(
+  int hwnd,
+  int hwndInsertAfter,
+  int x,
+  int y,
+  int cx,
+  int cy,
+  int flags,
+);
+
+/// Win32 RECT（GetWindowRect / SetWindowPos 出参）。
+final class _Rect extends Struct {
+  @Int32()
+  external int left;
+
+  @Int32()
+  external int top;
+
+  @Int32()
+  external int right;
+
+  @Int32()
+  external int bottom;
+}
+
+/// Flutter Windows 宿主窗口类名（模板固定值），找宿主 HWND 用。
+const String _flutterWindowClass = 'FLUTTER_RUNNER_WIN32_WINDOW';
+
 /// WebView2 残留窗口清扫器（仅 Windows；其它平台全部短路）。
 ///
 /// **故障本体**：flutter_inappwebview 在 Windows 上把 WebView2 的内容渲染在
@@ -130,6 +173,9 @@ class WebViewWindowGuard {
   static const int _th32csSnapProcess = 0x2; // TH32CS_SNAPPROCESS
   static const int _gwChild = 5; // GW_CHILD
   static const int _gwHwndNext = 2; // GW_HWNDNEXT
+  static const int _swpAsyncWindowPos = 0x4000; // SWP_ASYNCWINDOWPOS
+  static const int _swpNoActivate = 0x0010; // SWP_NOACTIVATE
+  static const int _swpNoZOrder = 0x0004; // SWP_NOZORDER
 
   /// 我们亲手藏起来的句柄。恢复时只放行这份名单。
   final List<int> _sweptHandles = <int>[];
@@ -190,6 +236,14 @@ class WebViewWindowGuard {
   late final _CloseHandleDart _closeHandle = _kernel32
       .lookupFunction<_CloseHandleNative, _CloseHandleDart>('CloseHandle');
 
+  late final _GetWindowRectDart _getWindowRect = _user32
+      .lookupFunction<_GetWindowRectNative, _GetWindowRectDart>(
+    'GetWindowRect',
+  );
+
+  late final _SetWindowPosDart _setWindowPos = _user32
+      .lookupFunction<_SetWindowPosNative, _SetWindowPosDart>('SetWindowPos');
+
   // --------------------------------------------------------------- 对外接口
 
   /// 宿主窗口即将/已经不可见（收托盘、最小化、退出）时调用：
@@ -242,7 +296,92 @@ class WebViewWindowGuard {
     }
   }
 
+  /// 宿主窗口 rect 变化（拖动/缩放/最大化/还原）后的**对账**：
+  /// 把完全落在宿主窗口矩形之外的可见 WebView2 弹窗挪回宿主当前矩形。
+  ///
+  /// **为什么需要它**：hide/show 清扫只覆盖"宿主不可见→恢复"（收托盘/
+  /// 最小化）；而**最大化→还原全程宿主可见**，谁也没动弹窗。插件自己
+  /// 的位置同步链在这条路径上会失灵：宿主已缩回小窗，弹窗却留在最大化
+  /// 时的旧矩形上 —— 旧矩形内（宿主窗口之外的部分）点击被它静默吞掉，
+  /// 用户看到的就是"窗口缩小了，但旁边一大块红框区域点不动"。
+  ///
+  /// 判定保守：**完全无交集**才算错位（正常同步的弹窗必然与宿主相交，
+  /// 因为 InAppWebView 布局在窗口内），误伤为零。挪动用
+  /// `SWP_ASYNCWINDOWPOS` 投递不等回执，WebView2 正忙也不阻塞宿主；
+  /// `SWP_NOZORDER|SWP_NOACTIVATE` 保证只挪矩形不动 Z 序/不抢焦点。
+  /// 挪动这一下本身也常能惊动 WebView2 重新走它自己的同步。
+  void resyncToHost() {
+    if (!Platform.isWindows) return;
+    try {
+      final int host = _findHostHwnd();
+      if (host == 0) return;
+      // 最小化/收托盘态不对账（此时宿主 rect 是 -32000 系的无效值），
+      // 那两条路走 hideOrphaned/showSwept。
+      if (_isWindowVisible(host) == 0) return;
+      final Pointer<_Rect> hostRect = calloc<_Rect>();
+      final Pointer<_Rect> wvRect = calloc<_Rect>();
+      try {
+        if (_getWindowRect(host, hostRect) == 0) return;
+        final int hw = hostRect.ref.right - hostRect.ref.left;
+        final int hh = hostRect.ref.bottom - hostRect.ref.top;
+        if (hw <= 0 || hh <= 0) return;
+        for (final int hwnd in _findVisibleWebviewWindows()) {
+          if (_getWindowRect(hwnd, wvRect) == 0) continue;
+          final bool disjoint =
+              wvRect.ref.right <= hostRect.ref.left ||
+              wvRect.ref.left >= hostRect.ref.right ||
+              wvRect.ref.bottom <= hostRect.ref.top ||
+              wvRect.ref.top >= hostRect.ref.bottom;
+          if (!disjoint) continue;
+          _setWindowPos(
+            hwnd,
+            0,
+            hostRect.ref.left,
+            hostRect.ref.top,
+            hw,
+            hh,
+            _swpAsyncWindowPos | _swpNoActivate | _swpNoZOrder,
+          );
+        }
+      } finally {
+        calloc.free(hostRect);
+        calloc.free(wvRect);
+      }
+    } catch (_) {
+      // 对账失败不影响任何主流程 —— 大不了维持原故障形态，不崩。
+    }
+  }
+
   // --------------------------------------------------------------- 内部实现
+
+  /// 桌面链（Z 序）里找**本进程**的 Flutter 宿主窗：类名 + PID 双匹配。
+  int _findHostHwnd() {
+    final int myPid = _getCurrentProcessId();
+    final Pointer<Uint32> pidBuf = calloc<Uint32>();
+    final Pointer<Uint16> clsBuf = calloc<Uint16>(256);
+    try {
+      int hwnd = _getWindow(_getDesktopWindow(), _gwChild);
+      int guard = 0;
+      while (hwnd != 0 && guard++ < 10000) {
+        _getWindowThreadProcessId(hwnd, pidBuf);
+        if (pidBuf.value == myPid) {
+          final int n = _getClassName(hwnd, clsBuf, 256);
+          if (n > 0 &&
+              String.fromCharCodes(clsBuf.asTypedList(n)) ==
+                  _flutterWindowClass) {
+            return hwnd;
+          }
+        }
+        hwnd = _getWindow(hwnd, _gwHwndNext);
+      }
+    } catch (_) {
+      // 找不到就走 resyncToHost 的 host == 0 短路。
+    } finally {
+      calloc.free(pidBuf);
+      calloc.free(clsBuf);
+    }
+    return 0;
+  }
 
   /// 枚举本进程系下 WebView2 当前**可见**的 `Chrome_WidgetWin*` 顶层窗。
   ///

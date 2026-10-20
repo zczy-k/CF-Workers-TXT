@@ -64,6 +64,11 @@ class TrayController with TrayListener, WindowListener {
 
   bool _started = false;
 
+  /// rect 对账防抖：手拖窗口边缘/标题栏时 onWindowResize/onWindowMove
+  /// 每帧都来，对账一次要打进程快照 + 全桌面窗口枚举，合并成 250ms
+  /// 一次（拖完 250ms 后落定一记，无感）。
+  Timer? _resyncDebounce;
+
   /// 关闭收托盘那一刻窗口是否最大化。恢复时按它还原。
   /// （SW_HIDE 保留最大化样式，但恢复链显式 maximize() 一次更稳，
   /// 也把"曾经最大化过但恢复时已被用户改小"的窗口区分开。）
@@ -154,6 +159,42 @@ class TrayController with TrayListener, WindowListener {
   @override
   void onWindowFocus() {
     WebViewWindowGuard.instance.showSwept();
+  }
+
+  // ------------------------------------------------------------- rect 对账
+
+  /// 最大化→**还原**是重点故障位：宿主全程可见，hide/show 清扫不上场，
+  /// 而插件的弹窗位置同步在这条路径上会失灵 —— WebView2 弹窗留在最大
+  /// 化旧矩形上继续吞宿主外的点击（用户实测：还原后窗口旁一大块区域
+  /// 点不动）。rect 一变就排一记对账：完全在宿主矩形外的弹窗挪回来。
+  ///
+  /// 手动拖动/缩放同样覆盖：弹窗错位残留不分触发来源，对账统一兜底。
+  @override
+  void onWindowResize() {
+    _scheduleResync();
+  }
+
+  @override
+  void onWindowMove() {
+    _scheduleResync();
+  }
+
+  @override
+  void onWindowMaximize() {
+    _scheduleResync();
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    _scheduleResync();
+  }
+
+  void _scheduleResync() {
+    if (!supported) return;
+    _resyncDebounce?.cancel();
+    _resyncDebounce = Timer(const Duration(milliseconds: 250), () {
+      WebViewWindowGuard.instance.resyncToHost();
+    });
   }
 
   // ------------------------------------------------------------- 托盘事件
