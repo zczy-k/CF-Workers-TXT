@@ -31,6 +31,12 @@ Future<void> main() async {
     final TrayController tray = TrayController(
       appName: branding.appName,
       hideToTray: () => state.config.closeToTray,
+      // 真退出前同步落盘：配置与下载记录都是 400ms 防抖写，退出路径上的
+      // 300ms 硬切可能抢在落盘前 —— 这里 flush 一次，最后的改动不丢。
+      onBeforeQuit: () async {
+        state.saveNow();
+        state.saveDownloadsNow();
+      },
     );
     await tray.start();
   }

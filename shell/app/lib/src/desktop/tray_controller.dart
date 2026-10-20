@@ -45,13 +45,22 @@ import 'webview_window_guard.dart';
 ///
 /// 移动端没有"托盘"概念：[supported] 为 false，全部逻辑短路。
 class TrayController with TrayListener, WindowListener {
-  TrayController({required this.appName, required this.hideToTray});
+  TrayController({
+    required this.appName,
+    required this.hideToTray,
+    this.onBeforeQuit,
+  });
 
   /// 展示在托盘提示与菜单里的名字。
   final String appName;
 
   /// 每次都现问：用户可能随时在设置里开关"关闭时收进托盘"。
   final bool Function() hideToTray;
+
+  /// 真退出前同步落盘一次。配置/下载记录都是 400ms 防抖写（saveSoon），
+  /// 而 _quit 末尾有 300ms 硬切 —— 不先 flush 的话，退出前最后几秒的
+  /// 改动（改设置、加站点、下载进度）可能还没写到盘进程就没了。
+  final Future<void> Function()? onBeforeQuit;
 
   bool _started = false;
 
@@ -202,6 +211,13 @@ class TrayController with TrayListener, WindowListener {
   }
 
   Future<void> _quit() async {
+    // 先落盘再拆窗口：防抖 Timer（400ms）跑不过后面的 300ms 硬切，
+    // 不主动 flush 的话退出前最后几秒的改动会丢。
+    try {
+      await onBeforeQuit?.call();
+    } catch (_) {
+      // 落盘失败不挡退出（磁盘满/只读介质时用户至少还能走）。
+    }
     // 退出前再清一次：进程树销毁前那几秒，别让残留窗继续吃桌面点击。
     // （清扫内部已改 ShowWindowAsync：跨进程投递不等回执，WebView2 正忙也
     // 不会把退出卡在这里。）
