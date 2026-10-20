@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -202,6 +203,8 @@ class TrayController with TrayListener, WindowListener {
 
   Future<void> _quit() async {
     // 退出前再清一次：进程树销毁前那几秒，别让残留窗继续吃桌面点击。
+    // （清扫内部已改 ShowWindowAsync：跨进程投递不等回执，WebView2 正忙也
+    // 不会把退出卡在这里。）
     WebViewWindowGuard.instance.hideOrphaned();
     try {
       await trayManager.destroy();
@@ -209,5 +212,10 @@ class TrayController with TrayListener, WindowListener {
       // 退出路径上任何托盘问题都不该挡住退出本身。
     }
     await windowManager.destroy();
+    // 兜底硬切：destroy() 返回 ≠ 进程已退 —— Flutter 引擎优雅关闭 +
+    // WebView2 子进程树退出常要 0.5~2s（用户感知就是"点了退出没反应"），
+    // 极端时消息循环卡住进程根本不退。给 300ms：正常路径引擎早退完了
+    // 轮不到这一刀；没退完就切，WebView2 子进程随宿主进程树一起被系统收走。
+    Timer(const Duration(milliseconds: 300), () => exit(0));
   }
 }

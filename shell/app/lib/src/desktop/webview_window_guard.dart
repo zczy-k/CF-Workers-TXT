@@ -73,8 +73,8 @@ typedef _GetWindowThreadProcessIdDart = int Function(
 typedef _IsWindowVisibleNative = Int32 Function(IntPtr hwnd);
 typedef _IsWindowVisibleDart = int Function(int hwnd);
 
-typedef _ShowWindowNative = Int32 Function(IntPtr hwnd, Int32 cmd);
-typedef _ShowWindowDart = int Function(int hwnd, int cmd);
+typedef _ShowWindowAsyncNative = Int32 Function(IntPtr hwnd, Int32 cmd);
+typedef _ShowWindowAsyncDart = int Function(int hwnd, int cmd);
 
 typedef _GetCurrentProcessIdNative = Uint32 Function();
 typedef _GetCurrentProcessIdDart = int Function();
@@ -162,8 +162,14 @@ class WebViewWindowGuard {
     'IsWindowVisible',
   );
 
-  late final _ShowWindowDart _showWindow = _user32
-      .lookupFunction<_ShowWindowNative, _ShowWindowDart>('ShowWindow');
+  /// 用 `ShowWindowAsync` 而不是 `ShowWindow`：目标是**别的进程**
+  /// （msedgewebview2.exe）的窗口，同步版会把消息发给对方线程并**等回执**——
+  /// 对方消息循环忙（正在渲染/加载）时宿主这边就卡住，退出/收托盘的
+  /// "点了没反应"感很大一部分来自这里。Async 版只投递不等，零阻塞。
+  late final _ShowWindowAsyncDart _showWindowAsync = _user32
+      .lookupFunction<_ShowWindowAsyncNative, _ShowWindowAsyncDart>(
+    'ShowWindowAsync',
+  );
 
   late final _GetCurrentProcessIdDart _getCurrentProcessId = _kernel32
       .lookupFunction<_GetCurrentProcessIdNative, _GetCurrentProcessIdDart>(
@@ -193,7 +199,7 @@ class WebViewWindowGuard {
     try {
       final List<int> targets = _findVisibleWebviewWindows();
       for (final int hwnd in targets) {
-        _showWindow(hwnd, _swHide);
+        _showWindowAsync(hwnd, _swHide);
         _sweptHandles.add(hwnd);
       }
     } catch (_) {
@@ -222,7 +228,7 @@ class WebViewWindowGuard {
             if (n <= 0) continue;
             final String cls = String.fromCharCodes(clsBuf.asTypedList(n));
             if (!cls.startsWith('Chrome_WidgetWin')) continue;
-            _showWindow(hwnd, _swShow);
+            _showWindowAsync(hwnd, _swShow);
           }
         } finally {
           calloc.free(pidBuf);
