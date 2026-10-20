@@ -569,8 +569,14 @@ class DownloadManager {
     try {
       await for (final List<int> chunk in resp.bytes) {
         if (_closed || task.status != DownloadStatus.running) {
-          // 暂停/取消/退出：把 sink 关掉收尾，半截文件留着以便续传。
+          // 暂停/退出：把 sink 关掉收尾，半截文件留着以便续传。
+          // 取消：用户明确不要这个文件了，把半截删掉 —— cancel() 的注释
+          // 一直声称"由 _run 收尾后删"，这里才是真正兑现的地方（此前只关
+          // sink 不删，取消的任务会在磁盘上留一堆没人清的半截文件）。
           await sink.close();
+          if (task.status == DownloadStatus.canceled) {
+            await _cleanupPartial(task);
+          }
           return;
         }
         sink.add(chunk);

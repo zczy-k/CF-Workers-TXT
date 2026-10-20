@@ -52,6 +52,9 @@ class ShellState extends ChangeNotifier {
   InAppWebViewController? activeController;
 
   final Map<String, _BlobSession> _blobs = <String, _BlobSession>{};
+
+  /// blob 通道的进度广播节流表（key → 上次广播时刻），见 [onBlobData]。
+  final Map<String, int> _blobLastNotifyMs = <String, int>{};
   Timer? _configTimer;
   Timer? _downloadsTimer;
 
@@ -521,7 +524,8 @@ class ShellState extends ChangeNotifier {
   }
 
   Future<void> onBlobData(Map<String, dynamic> payload) async {
-    final _BlobSession? session = _blobs[(payload['url'] as Object?)?.toString() ?? ''];
+    final String key = (payload['url'] as Object?)?.toString() ?? '';
+    final _BlobSession? session = _blobs[key];
     if (session == null) return;
     final String data = (payload['data'] as Object?)?.toString() ?? '';
     if (data.isEmpty) return;
@@ -529,7 +533,14 @@ class ShellState extends ChangeNotifier {
       final List<int> bytes = base64Decode(data);
       session.sink.add(bytes);
       session.task.received += bytes.length;
-      notifyListeners();
+      // 节流（与 core 的 _notify 同策略）：blob 分片 256KB 一个，前端导出大文件
+      // 时每秒几十次全 UI 广播会掉帧；收尾（onBlobEnd/Error）会强制刷一次，
+      // 最终状态不受影响。
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      if (now - (_blobLastNotifyMs[key] ?? 0) >= 200) {
+        _blobLastNotifyMs[key] = now;
+        notifyListeners();
+      }
     } catch (e) {
       await onBlobError(<String, dynamic>{
         'url': (payload['url'] as Object?)?.toString() ?? '',
@@ -542,6 +553,7 @@ class ShellState extends ChangeNotifier {
     final String key = (payload['url'] as Object?)?.toString() ?? '';
     final _BlobSession? session = _blobs.remove(key);
     if (session == null) return;
+    _blobLastNotifyMs.remove(key);
     await session.sink.close();
     session.task.status = DownloadStatus.done;
     _onDownloadsChanged();
@@ -551,6 +563,7 @@ class ShellState extends ChangeNotifier {
     final String key = (payload['url'] as Object?)?.toString() ?? '';
     final _BlobSession? session = _blobs.remove(key);
     if (session == null) return;
+    _blobLastNotifyMs.remove(key);
     await session.sink.close();
     session.task.status = DownloadStatus.failed;
     session.task.error = (payload['message'] as Object?)?.toString() ?? '导出失败';
