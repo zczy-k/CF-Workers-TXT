@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:webshell_core/webshell_core.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../engine/scripts.dart';
 import '../open.dart';
@@ -479,9 +480,25 @@ class _BrowserPageState extends State<BrowserPage> {
     );
     controller.addJavaScriptHandler(
       handlerName: 'fullscreen',
-      callback: (List<dynamic> args) {
+      callback: (List<dynamic> args) async {
         final Map<String, dynamic> data = payload(args);
-        if (mounted) setState(() => _fullscreen = data['on'] == true);
+        final bool on = data['on'] == true;
+        if (mounted) setState(() => _fullscreen = on);
+        // 网页全屏（主要是 <video>）时，WebView2 会自己把宿主窗口顶成无边框
+        // 全屏；退出全屏时它不一定能干净还原，一旦还原失败，窗口就卡在
+        // 无边框全屏状态盖住整个桌面 —— 用户看到的就是"桌面点不动了"，
+        // 点任务栏的「显示桌面」把窗口最小化之后才恢复。
+        //
+        // 这里跟着网页的全屏状态显式调一次 setFullScreen：进则进、退则退，
+        // 保证窗口状态始终由我们掌控、不会卡在全屏。
+        if (Platform.isWindows) {
+          try {
+            await windowManager.setFullScreen(on);
+          } catch (_) {
+            // 窗口已销毁 / 托盘未启用（windowManager 没初始化）等边界情况：
+            // 忽略即可，网页本身的全屏不受影响。
+          }
+        }
         return null;
       },
     );
