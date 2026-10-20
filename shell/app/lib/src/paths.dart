@@ -72,8 +72,31 @@ Future<void> _migrateFromAppData(Directory portable) async {
   try {
     final Directory src = Directory(joinPath(old.path, 'icons'));
     final Directory dst = Directory(joinPath(portable.path, 'icons'));
-    if (src.existsSync() && !dst.existsSync()) src.copySync(dst.path);
+    if (src.existsSync() && !dst.existsSync()) _copyDirSync(src, dst);
   } catch (_) {}
+}
+
+/// 递归复制目录。
+///
+/// Dart 的 `Directory` 没有现成的 `copySync`（只有 `File.copySync`），
+/// 所以这里自己走一遍：先建目标目录，再把源目录里的每个子目录 / 文件
+/// 按相对路径补到目标下。图标缓存里不该出现符号链接，遇到就跳过，
+/// 避免把链接指向的原始路径也搬过去。
+void _copyDirSync(Directory from, Directory to) {
+  to.createSync(recursive: true);
+  for (final FileSystemEntity e
+      in from.listSync(recursive: true, followLinks: false)) {
+    final String rel = e.path
+        .substring(from.path.length)
+        .replaceFirst(RegExp(r'^[\\/]+'), '');
+    if (rel.isEmpty) continue;
+    final String dest = joinPath(to.path, rel);
+    if (e is Directory) {
+      Directory(dest).createSync(recursive: true);
+    } else if (e is File) {
+      e.copySync(dest);
+    }
+  }
 }
 
 /// 图标缓存目录。
