@@ -12,18 +12,22 @@ class WebShellApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: state,
-      builder: (BuildContext context, Widget? _) {
-        final Color seed = Color(state.branding.themeColor);
-        return MaterialApp(
-          title: state.branding.appName,
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.light(seed),
-          darkTheme: AppTheme.dark(seed),
-          home: _homeFor(state),
-        );
-      },
+    // 主题/标题静态建：branding 运行期不变（preset.json 只在启动读一次），
+    // 没必要跟着任何通知重建。之前这里用 ListenableBuilder 监听整个
+    // ShellState 包住 MaterialApp —— 下载中每 200ms 一次 notifyListeners
+    // 会把 MaterialApp 整树重建（每次还 new 两套 ThemeData + Navigator +
+    // 全部路由），是"下载一跑全 App 掉帧"的根源。
+    // 只有 home 需要跟 config 变（站点增删 / 默认站点切换），把监听收窄到
+    // home 一层：下载进度广播最多重建首页列表，MaterialApp 本体不动。
+    return MaterialApp(
+      title: state.branding.appName,
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light(Color(state.branding.themeColor)),
+      darkTheme: AppTheme.dark(Color(state.branding.themeColor)),
+      home: ListenableBuilder(
+        listenable: state,
+        builder: (BuildContext context, Widget? _) => _homeFor(state),
+      ),
     );
   }
 

@@ -53,6 +53,9 @@ class _BrowserPageState extends State<BrowserPage> {
   bool _canForward = false;
   String? _error;
 
+  /// 进度条刷新台阶（5% 一档）。见 onProgressChanged 的节流说明。
+  int _lastProgressStep = -1;
+
   /// 被我们接管成下载的导航（url → 发生时间）。
   ///
   /// Windows 上我们靠"链接像文件"提前把导航掐掉，WebView2 会因此报一个
@@ -150,6 +153,7 @@ class _BrowserPageState extends State<BrowserPage> {
                 setState(() {
                   _loading = true;
                   _error = null;
+                  _lastProgressStep = -1; // 新导航：重置进度台阶
                   if (url != null) _url = url.toString();
                 });
               },
@@ -159,6 +163,14 @@ class _BrowserPageState extends State<BrowserPage> {
               },
               onProgressChanged: (InAppWebViewController controller, int progress) {
                 if (!mounted) return;
+                // 节流：WebView 的进度回调很密（约每 1% 一次），每次 setState
+                // 都重建整个 Scaffold。按 5% 台阶刷新，肉眼无差、build 次数
+                // 降一个量级；100% 和 0 恒放行，保证起止状态准确。
+                final int step = progress ~/ 5;
+                if (progress > 0 && progress < 100 && step == _lastProgressStep) {
+                  return;
+                }
+                _lastProgressStep = step;
                 setState(() => _progress = progress / 100);
               },
               onTitleChanged: (InAppWebViewController controller, String? title) {
