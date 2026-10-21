@@ -269,10 +269,15 @@ class TrayController with TrayListener, WindowListener {
       // 退出路径上任何托盘问题都不该挡住退出本身。
     }
     await windowManager.destroy();
-    // 兜底硬切：destroy() 返回 ≠ 进程已退 —— Flutter 引擎优雅关闭 +
-    // WebView2 子进程树退出常要 0.5~2s（用户感知就是"点了退出没反应"），
-    // 极端时消息循环卡住进程根本不退。给 300ms：正常路径引擎早退完了
-    // 轮不到这一刀；没退完就切，WebView2 子进程随宿主进程树一起被系统收走。
+    // 进程级收尸（Windows）：引擎优雅关闭靠不住 —— WebView2 子进程树自己
+    // 退要 0.5~2s，且 Chromium 的 browser 进程会把自己 detach 出 Job，
+    // Windows 按父子链收树漏收的就是孤儿。destroy() 之后**同步**亲手收割：
+    // 此刻引擎 teardown 仍在进行，正常退出与卡死两条路径都被这一刀覆盖
+    // （放进 300ms Timer 里就漏了正常路径——引擎先退完，Timer 根本不跑）。
+    // 只杀本进程后代里的 msedgewebview2.exe，不误伤别家 WebView2 宿主。
+    WebViewWindowGuard.instance.killDescendants();
+    // 兜底硬切：destroy() 返回 ≠ 进程已退 —— 极端时消息循环卡住进程根本
+    // 不退。给 300ms：正常路径引擎早退完了轮不到这一刀；没退完就切。
     Timer(const Duration(milliseconds: 300), () => exit(0));
   }
 }

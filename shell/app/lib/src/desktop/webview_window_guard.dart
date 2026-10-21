@@ -97,6 +97,20 @@ typedef _Process32WDart = int Function(
 typedef _CloseHandleNative = Int32 Function(IntPtr handle);
 typedef _CloseHandleDart = int Function(int handle);
 
+typedef _OpenProcessNative = IntPtr Function(
+  Uint32 desiredAccess,
+  Int32 inheritHandle,
+  Uint32 pid,
+);
+typedef _OpenProcessDart = int Function(
+  int desiredAccess,
+  int inheritHandle,
+  int pid,
+);
+
+typedef _TerminateProcessNative = Int32 Function(IntPtr handle, Uint32 exitCode);
+typedef _TerminateProcessDart = int Function(int handle, int exitCode);
+
 typedef _GetWindowRectNative = Int32 Function(
   IntPtr hwnd,
   Pointer<_Rect> rect,
@@ -195,6 +209,7 @@ class WebViewWindowGuard {
   static const int _swHide = 0;
   static const int _swShow = 5;
   static const int _th32csSnapProcess = 0x2; // TH32CS_SNAPPROCESS
+  static const int _processTerminate = 0x0001; // PROCESS_TERMINATE
   static const int _gwChild = 5; // GW_CHILD
   static const int _gwHwndNext = 2; // GW_HWNDNEXT
   static const int _swpAsyncWindowPos = 0x4000; // SWP_ASYNCWINDOWPOS
@@ -262,6 +277,14 @@ class WebViewWindowGuard {
 
   late final _CloseHandleDart _closeHandle = _kernel32
       .lookupFunction<_CloseHandleNative, _CloseHandleDart>('CloseHandle');
+
+  late final _OpenProcessDart _openProcess = _kernel32
+      .lookupFunction<_OpenProcessNative, _OpenProcessDart>('OpenProcess');
+
+  late final _TerminateProcessDart _terminateProcess = _kernel32
+      .lookupFunction<_TerminateProcessNative, _TerminateProcessDart>(
+    'TerminateProcess',
+  );
 
   late final _GetWindowRectDart _getWindowRect = _user32
       .lookupFunction<_GetWindowRectNative, _GetWindowRectDart>(
@@ -336,6 +359,46 @@ class WebViewWindowGuard {
     } finally {
       _sweptHandles.clear();
     }
+  }
+
+  /// 进程级收尸：把本进程系下所有 `msedgewebview2.exe` 硬杀掉，返回杀掉的
+  /// 个数。**只在退出路径上调用**（`tray_controller.dart` 的 `_quit`，在
+  /// `windowManager.destroy()` 之后、`exit(0)` 之前）。
+  ///
+  /// **为什么需要它**：`destroy()` 返回 ≠ WebView2 已退 —— 引擎优雅关闭 +
+  /// WebView2 子进程树自己退要 0.5~2s，而 Chromium 的 browser 进程有把自己
+  /// detach 出 Job 对象的行为，Windows 按父子链收树时可能漏收；漏收的进程
+  /// 父已死、成为孤儿，只能等 WebView2 Runtime 的 IPC 管道断开监控自杀（秒
+  /// 级起步，个别 Runtime 版本滞留更久）。退出前由宿主亲手点名收割，不再
+  /// "托付给系统"。
+  ///
+  /// * 名单来自 [_webviewProcessPids]（Toolhelp 快照 + 从本进程 BFS 的后代
+  ///   集），与窗口清扫同一套口径——**只杀本进程后代里的
+  ///   msedgewebview2.exe**，绝不误伤机器上别的 WebView2 宿主（Outlook、
+  ///   小组件等同名进程）。
+  /// * 杀完就退，跳过 Chromium 自己的落盘收尾（cookie/localStorage 最后
+  ///   几百毫秒的写入可能丢）——退出场景下这是可接受的代价，换来的是
+  ///   永不残留；Chromium 本来就按"随时会被杀"设计（crash-safe）。
+  /// * `OpenProcess` 失败（进程已退/权限不足）静默跳过：收尸只求尽力，
+  ///   任何失败都不挡退出主流程。
+  int killDescendants() {
+    if (!Platform.isWindows) return 0;
+    int killed = 0;
+    try {
+      final Set<int> pids = _webviewProcessPids();
+      for (final int pid in pids) {
+        final int h = _openProcess(_processTerminate, 0, pid);
+        if (h == 0) continue;
+        try {
+          if (_terminateProcess(h, 1) != 0) killed++;
+        } finally {
+          _closeHandle(h);
+        }
+      }
+    } catch (_) {
+      // 收尸失败不挡退出 —— 大不了维持原状（孤儿等 Runtime 自杀），不崩。
+    }
+    return killed;
   }
 
   /// 宿主窗口 rect 变化（拖动/缩放/最大化/还原）后的**对账**：
