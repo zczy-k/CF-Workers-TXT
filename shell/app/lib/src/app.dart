@@ -4,6 +4,12 @@ import 'state.dart';
 import 'theme.dart';
 import 'pages/browser_page.dart';
 import 'pages/home_page.dart';
+import 'startup_update_check.dart';
+
+/// MaterialApp 的 navigator key —— 供启动后的静默更新检查拿根 context 弹窗
+/// （见 `startup_update_check.dart`）。设置页的手动检查不需要它，那里有现成
+/// 的页面 context。
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 class WebShellApp extends StatelessWidget {
   const WebShellApp({super.key, required this.state});
@@ -20,6 +26,7 @@ class WebShellApp extends StatelessWidget {
     // 只有 home 需要跟 config 变（站点增删 / 默认站点切换），把监听收窄到
     // home 一层：下载进度广播最多重建首页列表，MaterialApp 本体不动。
     return MaterialApp(
+      navigatorKey: appNavigatorKey,
       title: state.branding.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(Color(state.branding.themeColor)),

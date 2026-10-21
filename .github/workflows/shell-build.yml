@@ -53,6 +53,10 @@ on:
         required: false
         type: boolean
         default: true
+      update_url:
+        description: '更新检查源（一个 JSON：{"version":"1.2.0","url":"…","note":"…"}）。留空 = 关闭更新检查'
+        required: false
+        default: ''
 
 concurrency:
   group: shell-build-${{ github.ref }}
@@ -108,6 +112,7 @@ jobs:
       LOGO_PATH: ${{ github.event.inputs.logo_path }}
       AUTO_ICON: ${{ github.event.inputs.auto_icon || 'true' }}
       ALLOW_ADD_SITE: ${{ github.event.inputs.allow_add_site || 'true' }}
+      UPDATE_URL: ${{ github.event.inputs.update_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -198,6 +203,10 @@ jobs:
             cp "$RUNNER_TEMP/branding/preset.json" assets/preset.json
             python3 "$GITHUB_WORKSPACE/shell/tools/patch_platform.py" \
               manifest android/app/src/main/AndroidManifest.xml "$APP_NAME_EFFECTIVE"
+            # 下载通知/前台服务：Kotlin + manifest 权限，全平台 API 零新依赖
+            python3 "$GITHUB_WORKSPACE/shell/tools/patch_platform.py" \
+              notify android/app/src/main/AndroidManifest.xml \
+              android/app/src/main/kotlin
           } 2>&1 | tee "$RUNNER_TEMP/patch-android.log"
 
       - name: pub get

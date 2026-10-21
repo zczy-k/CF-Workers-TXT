@@ -33,6 +33,9 @@ LOGO_URL="${LOGO_URL:-}"
 LOGO_PATH="${LOGO_PATH:-}"
 AUTO_ICON="${AUTO_ICON:-true}"
 ALLOW_ADD_SITE="${ALLOW_ADD_SITE:-true}"
+# 更新检查源：一个 JSON（{"version":"1.2.0","url":"…","note":"…"}）。
+# 留空 = 这个包不启用更新检查（设置页入口也跟着隐藏）。
+UPDATE_URL="${UPDATE_URL:-}"
 
 # 抓站点图标时用的 UA。写清楚自己是谁（而不是冒充 Chrome），同时带 compatible 前缀，
 # 让那些只拒绝"空 UA/爬虫 UA"的 CDN 放行；实测 flutter.dev / php.net / wikipedia 都能过。
@@ -279,6 +282,15 @@ if [ "$ALLOW_ADD_SITE" = "true" ]; then ADD_SITE_JSON="true"; else ADD_SITE_JSON
 
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
+# 版本号单一真相源：shell/app/pubspec.yaml 的 `version: 0.1.0+1`。
+# 构建号（+1）留给平台构建用，preset.json 只带用户可见的 0.1.0。
+# 读不到时退回 0.0.0 —— 版本显示宁缺毋滥，也别让构建挂在这。
+APP_VERSION="$(sed -n 's/^version:[[:space:]]*\([0-9][0-9A-Za-z.\-]*\)\(+[0-9]*\)\{0,1\}$/\1/p' \
+  "$(dirname "$0")/../app/pubspec.yaml" | head -1)"
+[ -n "$APP_VERSION" ] || APP_VERSION="0.0.0"
+
+# 可选字段：无条件写键。UPDATE_URL 为空时写空串，Dart 侧按 isNotEmpty
+# 判空跳过（空串与缺键等价）——比 heredoc 里拼条件行干净，也没有尾逗号问题。
 cat > "$OUT_DIR/preset.json" <<JSON
 {
   "appName": "$(json_escape "$APP_NAME")",
@@ -287,7 +299,9 @@ cat > "$OUT_DIR/preset.json" <<JSON
   "presetUrl": "$(json_escape "$PRESET_URL")",
   "presetName": "$(json_escape "$PRESET_NAME")",
   "allowAddSite": $ADD_SITE_JSON,
-  "showAddressBar": true
+  "showAddressBar": true,
+  "appVersion": "$APP_VERSION",
+  "updateUrl": "$(json_escape "$UPDATE_URL")"
 }
 JSON
 

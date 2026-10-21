@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,6 +9,8 @@ import 'package:webshell_core/webshell_core.dart';
 import 'src/app.dart';
 import 'src/desktop/single_instance.dart';
 import 'src/desktop/tray_controller.dart';
+import 'src/download_notifier.dart';
+import 'src/startup_update_check.dart';
 import 'src/state.dart';
 
 Future<void> main() async {
@@ -28,6 +31,9 @@ Future<void> main() async {
 
   final ShellState state = await ShellState.create(branding);
 
+  // Android：下载进度通知 + 下载期间前台保活（其他平台 attach 内部 no-op）。
+  DownloadNotifier.instance.attach(state);
+
   // 桌面端：关闭按钮收进系统托盘（最小化按钮走系统默认进任务栏，不接管；
   // 移动端没有托盘，supported 为 false 直接跳过）
   if (TrayController.supported) {
@@ -43,6 +49,10 @@ Future<void> main() async {
     );
     await tray.start();
   }
+
+  // 启动静默更新检查（24h 节流；无 updateUrl / 无新版 / 网络失败全部静默）。
+  // 不 await：启动路径不等网络，弹窗与否由它内部等第一帧决定。
+  unawaited(runStartupUpdateCheck(state));
 
   runApp(WebShellApp(state: state));
 }
