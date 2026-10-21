@@ -21,6 +21,7 @@ class ShellConfig {
     this.loadImages = true,
     this.saveLogin = true,
     this.closeToTray = true,
+    this.lastUpdateCheckMs = 0,
     Branding? branding,
   })  : sites = sites ?? <SiteProfile>[],
         branding = branding ?? Branding.generic;
@@ -51,6 +52,9 @@ class ShellConfig {
 
   /// 桌面端：点关闭/最小化时收进系统托盘，而不是退出/缩到任务栏。
   bool closeToTray;
+
+  /// 上次自动检查更新的时间（ms）。自动检查按 24h 节流，手动检查不受限。
+  int lastUpdateCheckMs;
 
   Branding branding;
 
@@ -132,6 +136,7 @@ class ShellConfig {
         'loadImages': loadImages,
         'saveLogin': saveLogin,
         'closeToTray': closeToTray,
+        'lastUpdateCheckMs': lastUpdateCheckMs,
         'branding': branding.toJson(),
       };
 
@@ -165,6 +170,7 @@ class ShellConfig {
     config.loadImages = _asBool(map['loadImages'], true);
     config.saveLogin = _asBool(map['saveLogin'], true);
     config.closeToTray = _asBool(map['closeToTray'], true);
+    config.lastUpdateCheckMs = _asInt(map['lastUpdateCheckMs'], 0);
     return config;
   }
 

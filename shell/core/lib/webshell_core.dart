@@ -9,4 +9,5 @@ export 'src/download.dart';
 export 'src/headers.dart';
 export 'src/models.dart';
 export 'src/paths.dart';
+export 'src/update.dart';
 export 'src/url_utils.dart';

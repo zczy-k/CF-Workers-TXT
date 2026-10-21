@@ -7,6 +7,7 @@ import 'package:webshell_core/webshell_core.dart';
 
 import '../open.dart';
 import '../state.dart';
+import '../update_prompt.dart';
 import '../widgets/centered.dart';
 import 'site_edit_page.dart' show copyText;
 
@@ -22,6 +23,26 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   ShellState get state => widget.state;
+
+  bool _checkingUpdate = false;
+
+  /// 手动检查：不走 24h 节流（用户点都点了，就查一次）。
+  /// 网络失败与"没有新版"在这里是同一个提示——更新检查不该弹错误对话框。
+  Future<void> _checkUpdate() async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    try {
+      final UpdateInfo? info = await UpdateChecker.fetch(state.branding);
+      if (!mounted) return;
+      if (info == null) {
+        _snack('已是最新版本');
+      } else {
+        await showUpdateDialog(context, info, state.branding.appVersion);
+      }
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -166,11 +187,20 @@ class _SettingsPageState extends State<SettingsPage> {
               ListTile(
                 title: Text(branding.appName),
                 subtitle: Text(
-                  '万能壳 0.1.0\n'
+                  '万能壳 ${branding.appVersion}\n'
                   '${branding.isWhiteLabel ? '专属（白标）版本' : '通用版本'}\n'
                   '引擎：Android 系统 WebView / Windows WebView2',
                 ),
               ),
+              // updateUrl 是构建期输入（preset.json），运行期只读。
+              // 通用壳默认没配 → 不显示这一项，用户不会点到"永远查不到"的死按钮。
+              if ((branding.updateUrl ?? '').trim().isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.system_update),
+                  title: Text(_checkingUpdate ? '正在检查更新…' : '检查更新'),
+                  subtitle: Text('当前版本 v${branding.appVersion}'),
+                  onTap: _checkingUpdate ? null : _checkUpdate,
+                ),
               if (state.engineUserAgent != null)
                 ListTile(
                   title: const Text('当前引擎 UA'),

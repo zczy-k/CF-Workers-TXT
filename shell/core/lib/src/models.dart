@@ -331,6 +331,8 @@ class Branding {
     this.presetName,
     this.allowAddSite = true,
     this.showAddressBar = true,
+    this.updateUrl,
+    this.appVersion = '0.1.0',
   });
 
   final String appName;
@@ -352,6 +354,14 @@ class Branding {
   /// 是否显示地址栏（想更"像原生 App"可以关）。
   final bool showAddressBar;
 
+  /// 更新检查地址：指向一个 JSON（`{"version":"1.2.0","url":"…","note":"…"}`）。
+  /// 白标 CI 输入 update_url 写进 preset.json；留空 = 不检查更新。
+  final String? updateUrl;
+
+  /// 壳自身版本（CI 从 pubspec.yaml 的 version 读出来写进 preset.json）。
+  /// 设置页显示与更新比较都以它为准——之前版本号写死在 UI 里，改 pubspec 忘改 UI 就对不上。
+  final String appVersion;
+
   static const Branding generic = Branding();
 
   bool get isWhiteLabel => (presetUrl ?? '').trim().isNotEmpty;
@@ -368,6 +378,8 @@ class Branding {
         if (presetName != null && presetName!.isNotEmpty) 'presetName': presetName,
         'allowAddSite': allowAddSite,
         'showAddressBar': showAddressBar,
+        if (updateUrl != null && updateUrl!.isNotEmpty) 'updateUrl': updateUrl,
+        'appVersion': appVersion,
       };
 
   static Branding fromJson(Object? raw) {
@@ -381,6 +393,8 @@ class Branding {
       presetName: _asString(raw['presetName']),
       allowAddSite: _asBool(raw['allowAddSite'], true),
       showAddressBar: _asBool(raw['showAddressBar'], true),
+      updateUrl: _asString(raw['updateUrl']),
+      appVersion: _asString(raw['appVersion']) ?? '0.1.0',
     );
   }
 }

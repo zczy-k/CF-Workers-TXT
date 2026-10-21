@@ -56,6 +56,10 @@ class _BrowserPageState extends State<BrowserPage> {
   /// 进度条刷新台阶（5% 一档）。见 onProgressChanged 的节流说明。
   int _lastProgressStep = -1;
 
+  /// 下拉刷新（Android/iOS）。Windows 的 WebView2 没这套手势，保持 null 即禁用。
+  /// 控制器传非 null 就是开关本身（插件侧无额外 setting）。
+  PullToRefreshController? _refreshController;
+
   /// 被我们接管成下载的导航（url → 发生时间）。
   ///
   /// Windows 上我们靠"链接像文件"提前把导航掐掉，WebView2 会因此报一个
@@ -67,6 +71,13 @@ class _BrowserPageState extends State<BrowserPage> {
   @override
   void initState() {
     super.initState();
+    if (Platform.isAndroid || Platform.isIOS) {
+      _refreshController = PullToRefreshController(
+        // 松手即刷新当前页；转圈的收口在 onLoadStop / onReceivedError 里做，
+        // 两条路都收，避免报错页把下拉动画挂成"永动"。
+        onRefresh: () => _controller?.reload(),
+      );
+    }
     final SiteProfile? site = _site;
     if (site != null) {
       _url = site.startUrl;
@@ -157,6 +168,7 @@ class _BrowserPageState extends State<BrowserPage> {
                   ],
                 ),
                 onWebViewCreated: _onWebViewCreated,
+                pullToRefreshController: _refreshController,
                 onLoadStart: (InAppWebViewController controller, WebUri? url) {
                   setState(() {
                     _loading = true;
@@ -168,6 +180,7 @@ class _BrowserPageState extends State<BrowserPage> {
                 onLoadStop: (InAppWebViewController controller, WebUri? url) async {
                   if (mounted) setState(() => _loading = false);
                   await _syncNavigation(controller);
+                  _refreshController?.endRefreshing();
                 },
                 onProgressChanged: (InAppWebViewController controller, int progress) {
                   if (!mounted) return;
@@ -204,6 +217,7 @@ class _BrowserPageState extends State<BrowserPage> {
                   }
                   if (!mounted) return;
                   setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
+                  _refreshController?.endRefreshing();
                 },
                 shouldOverrideUrlLoading: _shouldOverride,
                 onCreateWindow: _onCreateWindow,
@@ -417,6 +431,7 @@ class _BrowserPageState extends State<BrowserPage> {
       if (site != null) unawaited(widget.state.clearSiteData(site));
     }
     widget.state.activeController = null;
+    _refreshController?.dispose();
     super.dispose();
   }
 
