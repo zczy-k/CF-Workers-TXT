@@ -116,99 +116,108 @@ class _BrowserPageState extends State<BrowserPage> {
       );
     }
 
-    return Scaffold(
-      appBar: _fullscreen ? null : _appBar(context, site),
-      body: Column(
-        children: <Widget>[
-          if (_error != null) _errorBar(context),
-          Expanded(
-            child: InAppWebView(
-              key: ValueKey<String>(site.id),
-              initialUrlRequest: URLRequest(
-                url: WebUri(site.startUrl),
-                headers: _topLevelHeaders(site),
-              ),
-              initialSettings: _settings(site),
-              initialUserScripts: UnmodifiableListView<UserScript>(
-                <UserScript>[
-                  UserScript(
-                    // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）；
-                    // Android 的原生 `onDownloadStartRequest` 只在"WebView 发起导航 →
-                    // 服务端回附件"时才触发，页面用 JS（fetch/XHR/动态 a.click/
-                    // window.open）触发的下载它照样漏。所以两端的自动接管规则都开满：
-                    // 扩展名 + `?download` 查询串 + "链接文字写着下载"。
-                    // 漏拦的代价是"文件不知去向"，误拦最多多一次下载，宁可多猜。
-                    source: buildBridgeScript(
-                      site,
-                      guessQuery: true,
-                      guessByLabel: true,
+    // Android 返回键：有网页历史就回退一页，没历史才允许退出路由。
+    // 不拦这一层，返回键会直接把整个路由 pop 掉 —— 用户按一次返回就"退出网站"，
+    // 这是网页转 App 最典型的残废点（P0）。桌面端无感：PopScope 只拦 pop 请求。
+    return PopScope(
+      canPop: !_canGoBack,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (!didPop) _controller?.goBack();
+      },
+      child: Scaffold(
+        appBar: _fullscreen ? null : _appBar(context, site),
+        body: Column(
+          children: <Widget>[
+            if (_error != null) _errorBar(context),
+            Expanded(
+              child: InAppWebView(
+                key: ValueKey<String>(site.id),
+                initialUrlRequest: URLRequest(
+                  url: WebUri(site.startUrl),
+                  headers: _topLevelHeaders(site),
+                ),
+                initialSettings: _settings(site),
+                initialUserScripts: UnmodifiableListView<UserScript>(
+                  <UserScript>[
+                    UserScript(
+                      // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）；
+                      // Android 的原生 `onDownloadStartRequest` 只在"WebView 发起导航 →
+                      // 服务端回附件"时才触发，页面用 JS（fetch/XHR/动态 a.click/
+                      // window.open）触发的下载它照样漏。所以两端的自动接管规则都开满：
+                      // 扩展名 + `?download` 查询串 + "链接文字写着下载"。
+                      // 漏拦的代价是"文件不知去向"，误拦最多多一次下载，宁可多猜。
+                      source: buildBridgeScript(
+                        site,
+                        guessQuery: true,
+                        guessByLabel: true,
+                      ),
+                      injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                      forMainFrameOnly: false,
                     ),
-                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-                    forMainFrameOnly: false,
-                  ),
-                ],
+                  ],
+                ),
+                onWebViewCreated: _onWebViewCreated,
+                onLoadStart: (InAppWebViewController controller, WebUri? url) {
+                  setState(() {
+                    _loading = true;
+                    _error = null;
+                    _lastProgressStep = -1; // 新导航：重置进度台阶
+                    if (url != null) _url = url.toString();
+                  });
+                },
+                onLoadStop: (InAppWebViewController controller, WebUri? url) async {
+                  if (mounted) setState(() => _loading = false);
+                  await _syncNavigation(controller);
+                },
+                onProgressChanged: (InAppWebViewController controller, int progress) {
+                  if (!mounted) return;
+                  // 节流：WebView 的进度回调很密（约每 1% 一次），每次 setState
+                  // 都重建整个 Scaffold。按 5% 台阶刷新，肉眼无差、build 次数
+                  // 降一个量级；100% 和 0 恒放行，保证起止状态准确。
+                  final int step = progress ~/ 5;
+                  if (progress > 0 && progress < 100 && step == _lastProgressStep) {
+                    return;
+                  }
+                  _lastProgressStep = step;
+                  setState(() => _progress = progress / 100);
+                },
+                onTitleChanged: (InAppWebViewController controller, String? title) {
+                  if (!mounted) return;
+                  setState(() => _title = title ?? '');
+                },
+                onUpdateVisitedHistory: (InAppWebViewController controller, WebUri? url, bool? isReload) async {
+                  if (url != null && mounted) setState(() => _url = url.toString());
+                  await _syncNavigation(controller);
+                },
+                onReceivedError: (InAppWebViewController controller, WebResourceRequest request, WebResourceError error) {
+                  // 子资源（图片、广告）失败不要弹错，只有主文档失败才提示
+                  if (request.isForMainFrame != true) return;
+                  // 我们自己把"看起来是下载"的导航 abort 掉时，WebView2 会报一个
+                  // "操作已取消" —— 那是预期内的，不是真错误，别在页面上弹红条。
+                  final String failedUrl = request.url.toString();
+                  final int? interceptedAt = _interceptedAsDownload[failedUrl];
+                  final bool ourAbort = error.type == WebResourceErrorType.CANCELLED ||
+                      (interceptedAt != null && nowMs() - interceptedAt < 10000);
+                  if (ourAbort) {
+                    _interceptedAsDownload.remove(failedUrl);
+                    return;
+                  }
+                  if (!mounted) return;
+                  setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
+                },
+                shouldOverrideUrlLoading: _shouldOverride,
+                onCreateWindow: _onCreateWindow,
+                onCloseWindow: (InAppWebViewController controller) async {},
+                onDownloadStartRequest: _onDownloadStart,
+                // 站点开了"信任自签证书"才放行（Android / iOS 走这里）。
+                onReceivedServerTrustAuthRequest: _onServerTrust,
+                onReceivedHttpAuthRequest: _onHttpAuth,
+                onPermissionRequest: _onPermissionRequest,
               ),
-              onWebViewCreated: _onWebViewCreated,
-              onLoadStart: (InAppWebViewController controller, WebUri? url) {
-                setState(() {
-                  _loading = true;
-                  _error = null;
-                  _lastProgressStep = -1; // 新导航：重置进度台阶
-                  if (url != null) _url = url.toString();
-                });
-              },
-              onLoadStop: (InAppWebViewController controller, WebUri? url) async {
-                if (mounted) setState(() => _loading = false);
-                await _syncNavigation(controller);
-              },
-              onProgressChanged: (InAppWebViewController controller, int progress) {
-                if (!mounted) return;
-                // 节流：WebView 的进度回调很密（约每 1% 一次），每次 setState
-                // 都重建整个 Scaffold。按 5% 台阶刷新，肉眼无差、build 次数
-                // 降一个量级；100% 和 0 恒放行，保证起止状态准确。
-                final int step = progress ~/ 5;
-                if (progress > 0 && progress < 100 && step == _lastProgressStep) {
-                  return;
-                }
-                _lastProgressStep = step;
-                setState(() => _progress = progress / 100);
-              },
-              onTitleChanged: (InAppWebViewController controller, String? title) {
-                if (!mounted) return;
-                setState(() => _title = title ?? '');
-              },
-              onUpdateVisitedHistory: (InAppWebViewController controller, WebUri? url, bool? isReload) async {
-                if (url != null && mounted) setState(() => _url = url.toString());
-                await _syncNavigation(controller);
-              },
-              onReceivedError: (InAppWebViewController controller, WebResourceRequest request, WebResourceError error) {
-                // 子资源（图片、广告）失败不要弹错，只有主文档失败才提示
-                if (request.isForMainFrame != true) return;
-                // 我们自己把"看起来是下载"的导航 abort 掉时，WebView2 会报一个
-                // "操作已取消" —— 那是预期内的，不是真错误，别在页面上弹红条。
-                final String failedUrl = request.url.toString();
-                final int? interceptedAt = _interceptedAsDownload[failedUrl];
-                final bool ourAbort = error.type == WebResourceErrorType.CANCELLED ||
-                    (interceptedAt != null && nowMs() - interceptedAt < 10000);
-                if (ourAbort) {
-                  _interceptedAsDownload.remove(failedUrl);
-                  return;
-                }
-                if (!mounted) return;
-                setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
-              },
-              shouldOverrideUrlLoading: _shouldOverride,
-              onCreateWindow: _onCreateWindow,
-              onCloseWindow: (InAppWebViewController controller) async {},
-              onDownloadStartRequest: _onDownloadStart,
-              // 站点开了"信任自签证书"才放行（Android / iOS 走这里）。
-              onReceivedServerTrustAuthRequest: _onServerTrust,
-              onReceivedHttpAuthRequest: _onHttpAuth,
-              onPermissionRequest: _onPermissionRequest,
             ),
-          ),
-          if (!_fullscreen) _bottomBar(context),
-        ],
+            if (!_fullscreen) _bottomBar(context),
+          ],
+        ),
       ),
     );
   }
@@ -241,6 +250,24 @@ class _BrowserPageState extends State<BrowserPage> {
               ],
             ),
       actions: <Widget>[
+        // 下载入口放在顶栏（刷新旁）：手机拇指热区留给 后退/回家/前进 三个高频动作，
+        // 下载是低频入口，跟刷新做邻居。底栏因此腾干净（见 _bottomBar）。
+        // 浏览页是 push 出来的路由，App 级的 ListenableBuilder 不会重建它 ——
+        // 必须自己监听 state，否则下载一开始角标永远亮不起来（用户以为没在下载）。
+        ListenableBuilder(
+          listenable: widget.state,
+          builder: (BuildContext ctx, Widget? _) => IconButton(
+            tooltip: '下载',
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(builder: (BuildContext _) => DownloadsPage(state: widget.state)),
+            ),
+            icon: Badge(
+              isLabelVisible: widget.state.activeDownloadCount > 0,
+              label: Text('${widget.state.activeDownloadCount}'),
+              child: const Icon(Icons.download_outlined),
+            ),
+          ),
+        ),
         IconButton(
           tooltip: '刷新',
           onPressed: () => _controller?.reload(),
@@ -294,23 +321,22 @@ class _BrowserPageState extends State<BrowserPage> {
   }
 
   Widget _bottomBar(BuildContext context) {
+    // 手机拇指热区惯例：后退贴左下角、前进贴右下角、回家居中。
+    // 用 spaceBetween 让两端真正贴到 BottomAppBar 的两侧边缘，
+    // 而不是挤在中间（用户反馈：第一个/第二个挤在一起不符合使用习惯）。
+    // 下载入口已移到顶栏（见 _appBar）。
     return SafeArea(
       top: false,
       child: BottomAppBar(
         height: 56,
         padding: EdgeInsets.zero,
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: <Widget>[
             IconButton(
               tooltip: '后退',
               onPressed: _canGoBack ? () => _controller?.goBack() : null,
               icon: const Icon(Icons.arrow_back),
-            ),
-            IconButton(
-              tooltip: '前进',
-              onPressed: _canForward ? () => _controller?.goForward() : null,
-              icon: const Icon(Icons.arrow_forward),
             ),
             IconButton(
               tooltip: '回到首页',
@@ -320,21 +346,10 @@ class _BrowserPageState extends State<BrowserPage> {
               },
               icon: const Icon(Icons.home_outlined),
             ),
-            // 浏览页是 push 出来的路由，App 级的 ListenableBuilder 不会重建它 ——
-            // 必须自己监听 state，否则下载一开始角标永远亮不起来（用户以为没在下载）。
-            ListenableBuilder(
-              listenable: widget.state,
-              builder: (BuildContext ctx, Widget? _) => IconButton(
-                tooltip: '下载',
-                onPressed: () => Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(builder: (BuildContext _) => DownloadsPage(state: widget.state)),
-                ),
-                icon: Badge(
-                  isLabelVisible: widget.state.activeDownloadCount > 0,
-                  label: Text('${widget.state.activeDownloadCount}'),
-                  child: const Icon(Icons.download_outlined),
-                ),
-              ),
+            IconButton(
+              tooltip: '前进',
+              onPressed: _canForward ? () => _controller?.goForward() : null,
+              icon: const Icon(Icons.arrow_forward),
             ),
           ],
         ),

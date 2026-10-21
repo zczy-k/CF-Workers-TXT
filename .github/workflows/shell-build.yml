@@ -247,12 +247,83 @@ jobs:
           set -o pipefail
           flutter test 2>&1 | tee "$RUNNER_TEMP/android-widget-test.log"
 
-      # Flutter 模板的 release 默认用 debug keystore 签名，所以不配 Secrets 也能出
-      # 一个可侧载安装的 APK。要正式签名请在 Secrets 里放 keystore 再改 build.gradle。
+      # 签名策略：**固定密钥，双兜底**，否则每次构建的 APK 签名互不兼容，
+      # 覆盖安装会被 Android 拒绝（必须卸载重装、丢配置）。
+      #   1) Secrets 里配了 ANDROID_KEYSTORE_BASE64 + ANDROID_KEYSTORE_PASSWORD
+      #      + ANDROID_KEY_ALIAS + ANDROID_KEY_PASSWORD → 用它（推荐，密钥永不进仓库）；
+      #   2) 没配 Secrets → 用**仓库里这份固定 keystore**（shell/branding/release.jks，
+      #      无实际保密价值的发布便利密钥）—— 它让所有 build 的签名保持一致。
+      #   3) 仓库文件意外丢失 → 退回 Flutter 模板 debug keystore（能用，但各
+      #      runner 各一把、签名又不稳定了，仅作不fail的兜底）。
+      # 注意：keystore 不进 build.gradle，而是在 build 之后用 apksigner 重签名 ——
+      # 不用依赖生成期注入的 key.properties，避免脚手架被 CI 之外的构建搞乱。
+      - name: 解出签名材料
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/ks"
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "keystore 来源：GitHub Secrets"
+            printf '%s' '${{ secrets.ANDROID_KEYSTORE_BASE64 }}' | base64 -d > "$RUNNER_TEMP/ks/release.jks"
+            echo "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" > "$RUNNER_TEMP/ks/store-pass.txt"
+            echo "${{ secrets.ANDROID_KEY_ALIAS }}" > "$RUNNER_TEMP/ks/alias.txt"
+            echo "${{ secrets.ANDROID_KEY_PASSWORD }}" > "$RUNNER_TEMP/ks/key-pass.txt"
+          elif [ -f ../branding/release.jks ]; then
+            echo "keystore 来源：仓库 shell/branding/release.jks"
+            cp ../branding/release.jks "$RUNNER_TEMP/ks/release.jks"
+            printf 'webshell-release' > "$RUNNER_TEMP/ks/store-pass.txt"
+            : > "$RUNNER_TEMP/ks/alias.txt"
+            printf 'webshell-release' > "$RUNNER_TEMP/ks/key-pass.txt"
+          else
+            echo "keystore 来源：Flutter 模板 debug keystore（兜底）"
+            cp "$HOME/.android/debug.keystore" "$RUNNER_TEMP/ks/release.jks"
+            printf 'android' > "$RUNNER_TEMP/ks/store-pass.txt"
+            printf 'androiddebugkey' > "$RUNNER_TEMP/ks/alias.txt"
+            printf 'android' > "$RUNNER_TEMP/ks/key-pass.txt"
+          fi
+          ls -l "$RUNNER_TEMP/ks"
+
       - name: 构建 release APK
         run: |
           set -o pipefail
           flutter build apk --release 2>&1 | tee "$RUNNER_TEMP/android-build.log"
+
+      # flutter build 出来的是 debug-key 签的 APK（模板默认）。用上面解出的固定
+      # 密钥重签：zipalign 4 字节对齐 → apksigner 签名（v1+v2+v3 全开，Android
+      # 4.4~15+ 通吃）。apksigner 在 build-tools 里，路径探一下（runner 镜像常挪）。
+      - name: 固定密钥重签名
+        run: |
+          set -o pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(ls -t "$SDK_ROOT"/build-tools/*/apksigner 2>/dev/null | head -1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo '::error::找不到 apksigner（build-tools 未安装？）'
+            exit 1
+          fi
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          ZIPALIGN="$(dirname "$APKSIGNER")/zipalign"
+          "$ZIPALIGN" -f 4 "$APK" "$APK.aligned"
+          # 别名只在 Secrets 路径必填（用户的 keystore 可能多条目）；仓库/兜底
+          # keystore 都只有一条目，留空让 apksigner 自己选，避开 PFX 别名是
+          # "1" 还是 friendlyname 的平台差异。
+          # keystore 类型按文件魔数定（JKS 头是 FEEDFEED，其余按 PKCS12 读），
+          # 不赌 apksigner 的默认类型探测 —— 仓库这份是 Windows 导出的 PFX（PKCS12）。
+          MAGIC="$(head -c 4 "$RUNNER_TEMP/ks/release.jks" | od -An -tx1 | tr -d ' \n')"
+          KSTYPE=PKCS12
+          if [ "$MAGIC" = "feedfeed" ]; then KSTYPE=JKS; fi
+          echo "keystore 类型：$KSTYPE"
+          SIGN_ARGS=(sign
+            --ks "$RUNNER_TEMP/ks/release.jks"
+            --ks-type "$KSTYPE"
+            --ks-pass "file:$RUNNER_TEMP/ks/store-pass.txt"
+            --key-pass "file:$RUNNER_TEMP/ks/key-pass.txt"
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true)
+          ALIAS="$(cat "$RUNNER_TEMP/ks/alias.txt")"
+          if [ -n "$ALIAS" ]; then
+            SIGN_ARGS+=(--ks-key-alias "$ALIAS")
+          fi
+          "$APKSIGNER" "${SIGN_ARGS[@]}" "$APK.aligned"
+          mv -f "$APK.aligned" "$APK"
+          "$APKSIGNER" verify --print-certs "$APK" | head -5
 
       - name: 重命名产物
         run: |
