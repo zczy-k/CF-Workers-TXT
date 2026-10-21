@@ -325,6 +325,7 @@ DateTime? _tryParseHttpDate(String value) {
 class Branding {
   const Branding({
     this.appName = 'WebShell',
+    this.appId,
     this.themeColor = SiteProfile.defaultThemeColor,
     this.presetUrl,
     this.presetName,
@@ -333,6 +334,12 @@ class Branding {
   });
 
   final String appName;
+
+  /// 包身份（CI 的 app_id，例如 com.corp.oa）。单实例互斥按它判定：
+  /// app_id 相同的两个包（哪怕显示名不同）算同一个应用，不允许双开。
+  /// 旧包的 preset.json 没这个字段 → null → 守卫退回按 appName 互斥。
+  final String? appId;
+
   final int themeColor;
 
   /// 预置站点入口 —— 白标版的核心。
@@ -355,6 +362,7 @@ class Branding {
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'appName': appName,
+        if (appId != null && appId!.isNotEmpty) 'appId': appId,
         'themeColor': themeColor,
         if (presetUrl != null && presetUrl!.isNotEmpty) 'presetUrl': presetUrl,
         if (presetName != null && presetName!.isNotEmpty) 'presetName': presetName,
@@ -367,6 +375,7 @@ class Branding {
     final Object? rawUrl = raw['presetUrl'];
     return Branding(
       appName: _asString(raw['appName']) ?? 'WebShell',
+      appId: _asString(raw['appId']),
       themeColor: _asInt(raw['themeColor'], SiteProfile.defaultThemeColor),
       presetUrl: rawUrl is String ? normalizeUrl(rawUrl) : null,
       presetName: _asString(raw['presetName']),

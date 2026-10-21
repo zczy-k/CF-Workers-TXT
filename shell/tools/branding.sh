@@ -282,6 +282,7 @@ json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 cat > "$OUT_DIR/preset.json" <<JSON
 {
   "appName": "$(json_escape "$APP_NAME")",
+  "appId": "$(json_escape "$APP_ID_EFFECTIVE")",
   "themeColor": $COLOR_INT,
   "presetUrl": "$(json_escape "$PRESET_URL")",
   "presetName": "$(json_escape "$PRESET_NAME")",
