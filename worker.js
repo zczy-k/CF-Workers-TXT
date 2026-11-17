@@ -3090,7 +3090,9 @@ aside{width:var(--side-w,256px);flex:0 0 var(--side-w,256px);background:#fff;bor
 display:flex;flex-direction:column;height:100%}
 /* 侧栏与正文之间的拖拽手柄。压在边框上，平时透明，悬停/拖拽时露出蓝色竖条 */
 .sideGrip{flex:0 0 5px;width:5px;margin-left:-1px;padding:0;border:none;background:transparent;
-cursor:col-resize;position:relative;z-index:6}
+cursor:col-resize;position:relative;z-index:6;touch-action:none}
+/* 透明触摸热区：手柄本体只有 5px，手指点不中；向左右各扩 12px 命中区，不影响布局 */
+.sideGrip::before{content:"";position:absolute;top:0;bottom:0;left:-7px;right:-7px}
 .sideGrip::after{content:"";position:absolute;left:1px;top:50%;transform:translateY(-50%);width:2px;height:36px;
 border-radius:2px;background:transparent;transition:background .15s}
 .sideGrip:hover::after,.sideGrip.on::after,.sideGrip:focus-visible::after{background:#1f6feb}
@@ -7648,10 +7650,17 @@ function fitSideW(){
 }
 
 var gripDrag = null;
+function gripX(e){
+  var x = (e.clientX != null) ? e.clientX : e.pageX;
+  return (x != null) ? x : 0;
+}
 function onGripMove(e){
   if (!gripDrag) return;
-  e.preventDefault();
-  setSideW(gripDrag.w + (e.clientX - gripDrag.x), true);
+  if (e.preventDefault) e.preventDefault();
+  // 目标宽度用"按下点 + 位移"的绝对量算：鼠标和触屏可能把同一次移动各派发一遍，
+  // 重复进入这里也只会算出同一个值，不会像增量累加那样漂移。
+  setSideW(gripDrag.w + (gripX(e) - gripDrag.x), true);
+  return false;
 }
 function endGrip(){
   if (!gripDrag) return;
@@ -7659,20 +7668,39 @@ function endGrip(){
   var g = document.getElementById('sideGrip');
   if (g) g.classList.remove('on');
   document.body.classList.remove('grip-ing');
-  window.removeEventListener('pointermove', onGripMove);
-  window.removeEventListener('pointerup', endGrip);
+  // 注册时用的是捕获阶段（第三个参数 true），移除也必须带 true，
+  // 否则移除的是"冒泡阶段"那个并不存在的监听，会一直挂着。
+  window.removeEventListener('mousemove', onGripMove, true);
+  window.removeEventListener('pointermove', onGripMove, true);
+  window.removeEventListener('mouseup', endGrip, true);
+  window.removeEventListener('pointerup', endGrip, true);
+  window.removeEventListener('pointercancel', endGrip, true);
+  window.removeEventListener('blur', endGrip);
   try { localStorage.setItem(SIDE_KEY, String(sideW())); } catch (e) {}
   reflowEditor();
 }
 function onGripDown(e){
-  if (e.pointerType && e.pointerType !== 'mouse') return;   // 触屏交给页面滚动
-  e.preventDefault();
-  gripDrag = { x: e.clientX, w: sideW() };
+  // 鼠标走 mousedown 这一条：内嵌 WebView 宿主（Windows 的 WebView2 就是这样）
+  // 把鼠标喂进页面时，pointer 事件的那一层可能被吞掉或 pointerType 失真，
+  // 而 mouse 事件永远是通的。鼠标的 pointerdown 不再重复处理一次。
+  if (e.type === 'pointerdown' && e.pointerType === 'mouse') return;
+  if (e.button != null && e.button !== 0) return;   // 只认主键（触摸的 button 恒为 0）
+  if (e.preventDefault) e.preventDefault();
+  gripDrag = { x: gripX(e), w: sideW() };
   var g = document.getElementById('sideGrip');
   if (g) g.classList.add('on');
   document.body.classList.add('grip-ing');
-  window.addEventListener('pointermove', onGripMove);
-  window.addEventListener('pointerup', endGrip);
+  // 全部挂 window + 捕获阶段：页面上任何元素调 stopPropagation 都拦不住，
+  // 鼠标/手指滑出这根窄手柄之后事件也照样到 window，不会中途断流。
+  window.addEventListener('mousemove', onGripMove, true);
+  window.addEventListener('pointermove', onGripMove, true);
+  window.addEventListener('mouseup', endGrip, true);
+  window.addEventListener('pointerup', endGrip, true);
+  // 系统手势/来电打断时 pointercancel 会来，不清状态的话下次点一下会"粘住"
+  window.addEventListener('pointercancel', endGrip, true);
+  // 窗口失焦（Alt+Tab、弹窗抢焦点）时 mouseup 收不到，靠它兜底
+  window.addEventListener('blur', endGrip);
+  return false;
 }
 function onGripKey(e){
   var step = e.shiftKey ? 40 : 12;
@@ -10605,6 +10633,7 @@ document.getElementById('sideMask').onclick = function(){ document.body.classLis
 (function(){
   var grip = document.getElementById('sideGrip');
   if (grip){
+    grip.addEventListener('mousedown', onGripDown);
     grip.addEventListener('pointerdown', onGripDown);
     grip.addEventListener('dblclick', function(e){
       e.preventDefault();

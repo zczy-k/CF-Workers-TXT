@@ -120,5 +120,22 @@ void main() {
           reason: 'zip/单文件下载要在源头抓住 Blob 本体');
       expect(js.contains('WS_BLOBS'), isTrue);
     });
+
+    test('长按菜单：只拦链接，普通文本/输入框放行系统选择菜单（复制/剪切/全选）', () {
+      final String js = buildBridgeScript(_site());
+      // contextmenu 处理器必须先找链接，找不到就直接 return —— 这一句保证
+      // 长按文本框走系统原生菜单（全选/复制/剪切/粘贴），不能被我们吞掉。
+      expect(js.contains('var el = closestAnchor(e.target);'), isTrue);
+      expect(js.contains('if (!el) { return; }'), isTrue,
+          reason: '非链接必须放行，否则 Android 上文本框没法复制/剪切/全选');
+      // preventDefault 只能出现在"确认是链接之后"的分支里，绝不能对整页无条件调用。
+      // （脚本里 handleAnchor / submit 也有 preventDefault，这里只断言 contextmenu
+      // 块里"先 return 后 preventDefault"的顺序没被改坏。）
+      final int retAt = js.indexOf('var el = closestAnchor(e.target);');
+      final int preventAt = js.indexOf('post(\'longPressLink\'', retAt);
+      expect(retAt, greaterThan(0));
+      expect(preventAt, greaterThan(retAt),
+          reason: 'longPressLink 的上报必须走在"非链接直接 return"之后');
+    });
   });
 }

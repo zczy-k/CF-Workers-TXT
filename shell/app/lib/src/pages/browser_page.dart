@@ -398,8 +398,14 @@ class _BrowserPageState extends State<BrowserPage> {
       // 安全第一：不允许网页通过 file:// 读本机文件；上传走系统文件选择器，不受影响
       allowFileAccess: false,
       allowContentAccess: false,
-      // 关掉 WebView 自带的上下文菜单，长按才会落到我们的桥接脚本里
-      disableContextMenu: true,
+      // 保留 WebView 自带的上下文菜单 —— 长按文本框的"全选/复制/剪切/粘贴"
+      // 就是它弹的。曾 here 设过 true，结果 Android 上长按输入框完全没有菜单
+      // （插件在 Android 是把 ActionMode 的 menu clear 掉再 finish，等于连文本
+      // 选择菜单一起禁了），表现为"文本没法复制/剪切/全选"。
+      // 长按链接的自定义菜单不依赖这个开关：JS 的 DOM contextmenu 事件照常触发，
+      // 脚本会先判断命中目标，只对 <a> preventDefault 并弹我们自己的菜单；
+      // 普通文本不 preventDefault，于是系统菜单正常出现，两者不冲突。
+      disableContextMenu: false,
       useWideViewPort: true,
       loadWithOverviewMode: true,
       verticalScrollBarEnabled: false,

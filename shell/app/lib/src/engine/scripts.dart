@@ -381,7 +381,12 @@ const String _template = r'''
   } catch (e) { }
 
   // ---- 4) 长按链接 → 原生菜单 ---------------------------------------------
-  // 需要原生侧关掉 WebView 自带的上下文菜单（disableContextMenu），这个事件才会来。
+  // 只拦"命中链接"的 contextmenu；普通文本/输入框一律放行，让 WebView 自带的
+  // 文本选择菜单（全选/复制/剪切/粘贴）正常弹出。原生侧因此**不能**设
+  // disableContextMenu:true —— 那会把文本选择菜单一起禁掉（Android 上是直接
+  // clear+finish 掉 ActionMode），表现为"文本框里的字没法复制/剪切/全选"。
+  // DOM 的 contextmenu 事件与原生菜单是两套机制：这里 preventDefault 只影响
+  // 这一次的链接长按，不依赖也不改动原生菜单开关。
   document.addEventListener('contextmenu', function (e) {
     var el = closestAnchor(e.target);
     if (!el) { return; }
