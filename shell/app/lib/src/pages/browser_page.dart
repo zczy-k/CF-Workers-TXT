@@ -141,102 +141,114 @@ class _BrowserPageState extends State<BrowserPage> {
       child: Scaffold(
         // 没有 AppBar：那 56dp 是"布局元素"，多高就实打实吃掉多少网页高度，
         // 而直达模式下标题区本来是空的 —— 用户看到的就是一条空白带。
-        // 现在网页从窗口顶边一直铺到底栏，功能按钮全部收进底栏（见 _bottomBar）：
-        // 壳的控件只存在于**布局占位区**里，永远不会盖住网页上的任何东西。
-        body: Column(
-          children: <Widget>[
-            if (_error != null) _errorBar(context),
-            Expanded(
-              child: InAppWebView(
-                key: ValueKey<String>(site.id),
-                initialUrlRequest: URLRequest(
-                  url: WebUri(site.startUrl),
-                  headers: _topLevelHeaders(site),
-                ),
-                initialSettings: _settings(site),
-                initialUserScripts: UnmodifiableListView<UserScript>(
-                  <UserScript>[
-                    UserScript(
-                      // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）；
-                      // Android 的原生 `onDownloadStartRequest` 只在"WebView 发起导航 →
-                      // 服务端回附件"时才触发，页面用 JS（fetch/XHR/动态 a.click/
-                      // window.open）触发的下载它照样漏。所以两端的自动接管规则都开满：
-                      // 扩展名 + `?download` 查询串 + "链接文字写着下载"。
-                      // 漏拦的代价是"文件不知去向"，误拦最多多一次下载，宁可多猜。
-                      source: buildBridgeScript(
-                        site,
-                        guessQuery: true,
-                        guessByLabel: true,
+        // 现在只保留一条底栏装功能按钮（见 _bottomBar），网页从状态栏下沿
+        // 一直铺到底栏；手机 / 平板的状态栏由下面的 SafeArea 让开。
+        // 硬规矩不变：壳的控件只存在于**布局占位区**里，不盖网页任何东西。
+        body: SafeArea(
+          // 没有 AppBar 之后，Scaffold 不再替 body 吃掉系统状态栏那一截。
+          // Android 15+ 强制 edge-to-edge：WebView 会从窗口 y=0 开始画，
+          // 站点自己的顶栏（根目录 / 刷新 / 退出）直接钻到状态栏底下，
+          // 和时间、信号、电量叠成一团（手机截图已复现；平板同一套代码同样会中）。
+          // SafeArea 是布局占位、不是浮层 —— 网页整体让开一个状态栏高度，
+          // 不遮任何网页内容；桌面 padding 为 0，等于没有这一层。
+          top: true,
+          // 底栏自带 SafeArea(top: false) 处理手势条 / 导航栏，这里别重复吃。
+          bottom: false,
+          child: Column(
+            children: <Widget>[
+              if (_error != null) _errorBar(context),
+              Expanded(
+                child: InAppWebView(
+                  key: ValueKey<String>(site.id),
+                  initialUrlRequest: URLRequest(
+                    url: WebUri(site.startUrl),
+                    headers: _topLevelHeaders(site),
+                  ),
+                  initialSettings: _settings(site),
+                  initialUserScripts: UnmodifiableListView<UserScript>(
+                    <UserScript>[
+                      UserScript(
+                        // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）；
+                        // Android 的原生 `onDownloadStartRequest` 只在"WebView 发起导航 →
+                        // 服务端回附件"时才触发，页面用 JS（fetch/XHR/动态 a.click/
+                        // window.open）触发的下载它照样漏。所以两端的自动接管规则都开满：
+                        // 扩展名 + `?download` 查询串 + "链接文字写着下载"。
+                        // 漏拦的代价是"文件不知去向"，误拦最多多一次下载，宁可多猜。
+                        source: buildBridgeScript(
+                          site,
+                          guessQuery: true,
+                          guessByLabel: true,
+                        ),
+                        injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                        forMainFrameOnly: false,
                       ),
-                      injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-                      forMainFrameOnly: false,
-                    ),
-                  ],
+                    ],
+                  ),
+                  onWebViewCreated: _onWebViewCreated,
+                  pullToRefreshController: _refreshController,
+                  onLoadStart: (InAppWebViewController controller, WebUri? url) {
+                    setState(() {
+                      _loading = true;
+                      _error = null;
+                      _lastProgressStep = -1; // 新导航：重置进度台阶
+                      if (url != null) _url = url.toString();
+                    });
+                  },
+                  onLoadStop: (InAppWebViewController controller, WebUri? url) async {
+                    if (mounted) setState(() => _loading = false);
+                    await _syncNavigation(controller);
+                    _refreshController?.endRefreshing();
+                  },
+                  onProgressChanged: (InAppWebViewController controller, int progress) {
+                    if (!mounted) return;
+                    // 节流：WebView 的进度回调很密（约每 1% 一次），每次 setState
+                    // 都重建整个 Scaffold。按 5% 台阶刷新，肉眼无差、build 次数
+                    // 降一个量级；100% 和 0 恒放行，保证起止状态准确。
+                    final int step = progress ~/ 5;
+                    if (progress > 0 && progress < 100 && step == _lastProgressStep) {
+                      return;
+                    }
+                    _lastProgressStep = step;
+                    setState(() => _progress = progress / 100);
+                  },
+                  onTitleChanged: (InAppWebViewController controller, String? title) {
+                    if (!mounted) return;
+                    setState(() => _title = title ?? '');
+                  },
+                  onUpdateVisitedHistory: (InAppWebViewController controller, WebUri? url, bool? isReload) async {
+                    if (url != null && mounted) setState(() => _url = url.toString());
+                    await _syncNavigation(controller);
+                  },
+                  onReceivedError: (InAppWebViewController controller, WebResourceRequest request, WebResourceError error) {
+                    // 子资源（图片、广告）失败不要弹错，只有主文档失败才提示
+                    if (request.isForMainFrame != true) return;
+                    // 我们自己把"看起来是下载"的导航 abort 掉时，WebView2 会报一个
+                    // "操作已取消" —— 那是预期内的，不是真错误，别在页面上弹红条。
+                    final String failedUrl = request.url.toString();
+                    final int? interceptedAt = _interceptedAsDownload[failedUrl];
+                    final bool ourAbort = error.type == WebResourceErrorType.CANCELLED ||
+                        (interceptedAt != null && nowMs() - interceptedAt < 10000);
+                    if (ourAbort) {
+                      _interceptedAsDownload.remove(failedUrl);
+                      return;
+                    }
+                    if (!mounted) return;
+                    setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
+                    _refreshController?.endRefreshing();
+                  },
+                  shouldOverrideUrlLoading: _shouldOverride,
+                  onCreateWindow: _onCreateWindow,
+                  onCloseWindow: (InAppWebViewController controller) async {},
+                  onDownloadStartRequest: _onDownloadStart,
+                  // 站点开了"信任自签证书"才放行（Android / iOS 走这里）。
+                  onReceivedServerTrustAuthRequest: _onServerTrust,
+                  onReceivedHttpAuthRequest: _onHttpAuth,
+                  onPermissionRequest: _onPermissionRequest,
                 ),
-                onWebViewCreated: _onWebViewCreated,
-                pullToRefreshController: _refreshController,
-                onLoadStart: (InAppWebViewController controller, WebUri? url) {
-                  setState(() {
-                    _loading = true;
-                    _error = null;
-                    _lastProgressStep = -1; // 新导航：重置进度台阶
-                    if (url != null) _url = url.toString();
-                  });
-                },
-                onLoadStop: (InAppWebViewController controller, WebUri? url) async {
-                  if (mounted) setState(() => _loading = false);
-                  await _syncNavigation(controller);
-                  _refreshController?.endRefreshing();
-                },
-                onProgressChanged: (InAppWebViewController controller, int progress) {
-                  if (!mounted) return;
-                  // 节流：WebView 的进度回调很密（约每 1% 一次），每次 setState
-                  // 都重建整个 Scaffold。按 5% 台阶刷新，肉眼无差、build 次数
-                  // 降一个量级；100% 和 0 恒放行，保证起止状态准确。
-                  final int step = progress ~/ 5;
-                  if (progress > 0 && progress < 100 && step == _lastProgressStep) {
-                    return;
-                  }
-                  _lastProgressStep = step;
-                  setState(() => _progress = progress / 100);
-                },
-                onTitleChanged: (InAppWebViewController controller, String? title) {
-                  if (!mounted) return;
-                  setState(() => _title = title ?? '');
-                },
-                onUpdateVisitedHistory: (InAppWebViewController controller, WebUri? url, bool? isReload) async {
-                  if (url != null && mounted) setState(() => _url = url.toString());
-                  await _syncNavigation(controller);
-                },
-                onReceivedError: (InAppWebViewController controller, WebResourceRequest request, WebResourceError error) {
-                  // 子资源（图片、广告）失败不要弹错，只有主文档失败才提示
-                  if (request.isForMainFrame != true) return;
-                  // 我们自己把"看起来是下载"的导航 abort 掉时，WebView2 会报一个
-                  // "操作已取消" —— 那是预期内的，不是真错误，别在页面上弹红条。
-                  final String failedUrl = request.url.toString();
-                  final int? interceptedAt = _interceptedAsDownload[failedUrl];
-                  final bool ourAbort = error.type == WebResourceErrorType.CANCELLED ||
-                      (interceptedAt != null && nowMs() - interceptedAt < 10000);
-                  if (ourAbort) {
-                    _interceptedAsDownload.remove(failedUrl);
-                    return;
-                  }
-                  if (!mounted) return;
-                  setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
-                  _refreshController?.endRefreshing();
-                },
-                shouldOverrideUrlLoading: _shouldOverride,
-                onCreateWindow: _onCreateWindow,
-                onCloseWindow: (InAppWebViewController controller) async {},
-                onDownloadStartRequest: _onDownloadStart,
-                // 站点开了"信任自签证书"才放行（Android / iOS 走这里）。
-                onReceivedServerTrustAuthRequest: _onServerTrust,
-                onReceivedHttpAuthRequest: _onHttpAuth,
-                onPermissionRequest: _onPermissionRequest,
               ),
-            ),
-            if (!_fullscreen) _bottomBar(context),
-          ],
+              if (!_fullscreen) _bottomBar(context),
+            ],
+          ),
         ),
       ),
     );
