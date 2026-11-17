@@ -66,6 +66,25 @@ class _BrowserPageState extends State<BrowserPage> {
   /// 导航失败；这张表用来认出"那是我们自己掐的"，别把红条弹给用户。
   final Map<String, int> _interceptedAsDownload = <String, int>{};
 
+  /// 悬浮工具条的不透明度。
+  ///
+  /// 三个取值都有明确含义，别随手改：
+  ///   * `1.0`  —— 常显（手指端点按后、鼠标悬停中、页面回到顶部）；
+  ///   * `0.35` —— 桌面"待机"：鼠标离开 1.5 秒后淡到这儿，看得见但不挡网页；
+  ///   * `0.0`  —— 触摸端"读文章模式"：往下滑时整条收起，让出屏幕。
+  double _chromeOpacity = 1;
+
+  /// 桌面端"鼠标离开 → 淡出"的延时器。每次进入都要取消，否则会出现
+  /// "刚移回来又被上一次的定时器按下去"的鬼畜。
+  Timer? _chromeTimer;
+
+  /// 触摸端上一次的滚动位置，用来判断方向（往下滑收、往上滑出）。
+  int _lastScrollY = 0;
+
+  /// 手机 / 平板。工具条的尺寸与隐藏策略按这个分叉，见 [_floatingToolbar]。
+  /// 桌面（Windows / Linux / macOS）一律走鼠标那一套：指针精确，可以做小。
+  bool get _isTouch => Platform.isAndroid || Platform.isIOS;
+
   SiteProfile? get _site => widget.state.config.byId(widget.siteId);
 
   @override
@@ -136,97 +155,125 @@ class _BrowserPageState extends State<BrowserPage> {
         if (!didPop) _controller?.goBack();
       },
       child: Scaffold(
-        appBar: _fullscreen ? null : _appBar(context, site),
+        // 没有 AppBar 了：那 56dp 是"布局元素"，多高就实打实吃掉多少网页高度，
+        // 而且直达模式下标题区本来就是空的 —— 用户看到的是一条空白带。
+        // 现在网页从窗口顶边一直铺到底栏，三个功能按钮改成右上角悬浮胶囊
+        // （_floatingToolbar），加载进度退化成最上沿 2dp 的一条细线，
+        // 两者都用 Stack 叠在 WebView 上、不参与布局，占用的垂直空间是 0。
         body: Column(
           children: <Widget>[
             if (_error != null) _errorBar(context),
             Expanded(
-              child: InAppWebView(
-                key: ValueKey<String>(site.id),
-                initialUrlRequest: URLRequest(
-                  url: WebUri(site.startUrl),
-                  headers: _topLevelHeaders(site),
-                ),
-                initialSettings: _settings(site),
-                initialUserScripts: UnmodifiableListView<UserScript>(
-                  <UserScript>[
-                    UserScript(
-                      // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）；
-                      // Android 的原生 `onDownloadStartRequest` 只在"WebView 发起导航 →
-                      // 服务端回附件"时才触发，页面用 JS（fetch/XHR/动态 a.click/
-                      // window.open）触发的下载它照样漏。所以两端的自动接管规则都开满：
-                      // 扩展名 + `?download` 查询串 + "链接文字写着下载"。
-                      // 漏拦的代价是"文件不知去向"，误拦最多多一次下载，宁可多猜。
-                      source: buildBridgeScript(
-                        site,
-                        guessQuery: true,
-                        guessByLabel: true,
-                      ),
-                      injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-                      forMainFrameOnly: false,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  InAppWebView(
+                    key: ValueKey<String>(site.id),
+                    initialUrlRequest: URLRequest(
+                      url: WebUri(site.startUrl),
+                      headers: _topLevelHeaders(site),
                     ),
-                  ],
-                ),
-                onWebViewCreated: _onWebViewCreated,
-                pullToRefreshController: _refreshController,
-                onLoadStart: (InAppWebViewController controller, WebUri? url) {
-                  setState(() {
-                    _loading = true;
-                    _error = null;
-                    _lastProgressStep = -1; // 新导航：重置进度台阶
-                    if (url != null) _url = url.toString();
-                  });
-                },
-                onLoadStop: (InAppWebViewController controller, WebUri? url) async {
-                  if (mounted) setState(() => _loading = false);
-                  await _syncNavigation(controller);
-                  _refreshController?.endRefreshing();
-                },
-                onProgressChanged: (InAppWebViewController controller, int progress) {
-                  if (!mounted) return;
-                  // 节流：WebView 的进度回调很密（约每 1% 一次），每次 setState
-                  // 都重建整个 Scaffold。按 5% 台阶刷新，肉眼无差、build 次数
-                  // 降一个量级；100% 和 0 恒放行，保证起止状态准确。
-                  final int step = progress ~/ 5;
-                  if (progress > 0 && progress < 100 && step == _lastProgressStep) {
-                    return;
-                  }
-                  _lastProgressStep = step;
-                  setState(() => _progress = progress / 100);
-                },
-                onTitleChanged: (InAppWebViewController controller, String? title) {
-                  if (!mounted) return;
-                  setState(() => _title = title ?? '');
-                },
-                onUpdateVisitedHistory: (InAppWebViewController controller, WebUri? url, bool? isReload) async {
-                  if (url != null && mounted) setState(() => _url = url.toString());
-                  await _syncNavigation(controller);
-                },
-                onReceivedError: (InAppWebViewController controller, WebResourceRequest request, WebResourceError error) {
-                  // 子资源（图片、广告）失败不要弹错，只有主文档失败才提示
-                  if (request.isForMainFrame != true) return;
-                  // 我们自己把"看起来是下载"的导航 abort 掉时，WebView2 会报一个
-                  // "操作已取消" —— 那是预期内的，不是真错误，别在页面上弹红条。
-                  final String failedUrl = request.url.toString();
-                  final int? interceptedAt = _interceptedAsDownload[failedUrl];
-                  final bool ourAbort = error.type == WebResourceErrorType.CANCELLED ||
-                      (interceptedAt != null && nowMs() - interceptedAt < 10000);
-                  if (ourAbort) {
-                    _interceptedAsDownload.remove(failedUrl);
-                    return;
-                  }
-                  if (!mounted) return;
-                  setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
-                  _refreshController?.endRefreshing();
-                },
-                shouldOverrideUrlLoading: _shouldOverride,
-                onCreateWindow: _onCreateWindow,
-                onCloseWindow: (InAppWebViewController controller) async {},
-                onDownloadStartRequest: _onDownloadStart,
-                // 站点开了"信任自签证书"才放行（Android / iOS 走这里）。
-                onReceivedServerTrustAuthRequest: _onServerTrust,
-                onReceivedHttpAuthRequest: _onHttpAuth,
-                onPermissionRequest: _onPermissionRequest,
+                    initialSettings: _settings(site),
+                    initialUserScripts: UnmodifiableListView<UserScript>(
+                      <UserScript>[
+                        UserScript(
+                          // Windows 上 WebView2 的下载事件没接到原生（ARCHITECTURE §7）；
+                          // Android 的原生 `onDownloadStartRequest` 只在"WebView 发起导航 →
+                          // 服务端回附件"时才触发，页面用 JS（fetch/XHR/动态 a.click/
+                          // window.open）触发的下载它照样漏。所以两端的自动接管规则都开满：
+                          // 扩展名 + `?download` 查询串 + "链接文字写着下载"。
+                          // 漏拦的代价是"文件不知去向"，误拦最多多一次下载，宁可多猜。
+                          source: buildBridgeScript(
+                            site,
+                            guessQuery: true,
+                            guessByLabel: true,
+                          ),
+                          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                          forMainFrameOnly: false,
+                        ),
+                      ],
+                    ),
+                    onWebViewCreated: _onWebViewCreated,
+                    pullToRefreshController: _refreshController,
+                    // 触摸端靠滚动方向决定胶囊收不收（桌面端在这个回调里直接 return）。
+                    onScrollChanged: _onScrollChanged,
+                    onLoadStart: (InAppWebViewController controller, WebUri? url) {
+                      setState(() {
+                        _loading = true;
+                        _error = null;
+                        _lastProgressStep = -1; // 新导航：重置进度台阶
+                        _lastScrollY = 0; // 换页了，滚动基线归零
+                        if (url != null) _url = url.toString();
+                      });
+                    },
+                    onLoadStop: (InAppWebViewController controller, WebUri? url) async {
+                      if (mounted) setState(() => _loading = false);
+                      await _syncNavigation(controller);
+                      _refreshController?.endRefreshing();
+                    },
+                    onProgressChanged: (InAppWebViewController controller, int progress) {
+                      if (!mounted) return;
+                      // 节流：WebView 的进度回调很密（约每 1% 一次），每次 setState
+                      // 都重建整个 Scaffold。按 5% 台阶刷新，肉眼无差、build 次数
+                      // 降一个量级；100% 和 0 恒放行，保证起止状态准确。
+                      final int step = progress ~/ 5;
+                      if (progress > 0 && progress < 100 && step == _lastProgressStep) {
+                        return;
+                      }
+                      _lastProgressStep = step;
+                      setState(() => _progress = progress / 100);
+                    },
+                    onTitleChanged: (InAppWebViewController controller, String? title) {
+                      if (!mounted) return;
+                      setState(() => _title = title ?? '');
+                    },
+                    onUpdateVisitedHistory: (InAppWebViewController controller, WebUri? url, bool? isReload) async {
+                      if (url != null && mounted) setState(() => _url = url.toString());
+                      await _syncNavigation(controller);
+                    },
+                    onReceivedError: (InAppWebViewController controller, WebResourceRequest request, WebResourceError error) {
+                      // 子资源（图片、广告）失败不要弹错，只有主文档失败才提示
+                      if (request.isForMainFrame != true) return;
+                      // 我们自己把"看起来是下载"的导航 abort 掉时，WebView2 会报一个
+                      // "操作已取消" —— 那是预期内的，不是真错误，别在页面上弹红条。
+                      final String failedUrl = request.url.toString();
+                      final int? interceptedAt = _interceptedAsDownload[failedUrl];
+                      final bool ourAbort = error.type == WebResourceErrorType.CANCELLED ||
+                          (interceptedAt != null && nowMs() - interceptedAt < 10000);
+                      if (ourAbort) {
+                        _interceptedAsDownload.remove(failedUrl);
+                        return;
+                      }
+                      if (!mounted) return;
+                      setState(() => _error = error.description.isEmpty ? '页面加载失败' : error.description);
+                      _refreshController?.endRefreshing();
+                    },
+                    shouldOverrideUrlLoading: _shouldOverride,
+                    onCreateWindow: _onCreateWindow,
+                    onCloseWindow: (InAppWebViewController controller) async {},
+                    onDownloadStartRequest: _onDownloadStart,
+                    // 站点开了"信任自签证书"才放行（Android / iOS 走这里）。
+                    onReceivedServerTrustAuthRequest: _onServerTrust,
+                    onReceivedHttpAuthRequest: _onHttpAuth,
+                    onPermissionRequest: _onPermissionRequest,
+                  ),
+                  // 加载进度：贴窗口最上沿的 2dp 细线。IgnorePointer 是必须的 ——
+                  // 它是横贯全宽的一层，不关掉命中测试就等于在网页顶上钉了一条
+                  // 点不动的死带，而且正好压在网页第一个可点元素上。
+                  if (!_fullscreen && _loading)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: IgnorePointer(
+                        child: LinearProgressIndicator(
+                          value: _progress <= 0 || _progress >= 1 ? null : _progress,
+                          minHeight: 2,
+                        ),
+                      ),
+                    ),
+                  if (!_fullscreen) _floatingToolbar(context),
+                ],
               ),
             ),
             if (!_fullscreen) _bottomBar(context),
@@ -236,73 +283,190 @@ class _BrowserPageState extends State<BrowserPage> {
     );
   }
 
-  PreferredSizeWidget _appBar(BuildContext context, SiteProfile site) {
-    final ThemeData theme = Theme.of(context);
-    return AppBar(
-      titleSpacing: 4,
-      // 直达模式（白标 + 禁加站）：整个 App 就这一个站点，标题栏文字没有信息量，
-      // 只留刷新 / 更多按钮，让它看起来更像一个独立 App。
-      title: widget.state.branding.singleSiteMode
-          ? null
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Text(
-                  _title.isEmpty ? site.displayName : _title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+  /// 悬浮胶囊工具条（方案 A）。
+  ///
+  /// 为什么不做顶栏：顶栏是布局元素，它有多高网页就矮多少；胶囊是叠加层，
+  /// 只盖住右上角约 120×44 的一块，其余像素全归网页。原来被"56dp 顶栏 +
+  /// 2dp 进度条"吃掉的高度，现在一像素不剩地还给了内容。
+  ///
+  /// 两端的手感差异（同一份代码，两套参数）：
+  ///   * 桌面（Windows / Linux / macOS）：鼠标是精确指针 → 胶囊做小（40 高、
+  ///     单键 36×36、图标 20）；鼠标离开 1.5 秒后淡到 35% 让位给内容，一移回来
+  ///     立刻恢复，符合桌面软件"chrome 让位"的惯例。
+  ///   * 手机 / 平板（Android / iOS）：手指要更大的命中区 → 44 高、单键 40×40、
+  ///     图标 22；触摸屏没有 hover，所以绝不能自动淡出（淡出了就点不到），
+  ///     改成跟着滚动走：往下读时收起、往回滑或回到顶部时冒出。
+  ///     收起时顺手把命中测试一起关掉，不留透明死区。
+  Widget _floatingToolbar(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    final bool touch = _isTouch;
+
+    final double barHeight = touch ? 44 : 40;
+    final double buttonSize = touch ? 40 : 36;
+
+    // 顶部留白跟着系统走：Android 的 body 一般已经在状态栏之下，padding.top
+    // 为 0、不吃额外空间；万一开了 edge-to-edge 或者在刘海屏 / 折叠屏上，
+    // 也不会把胶囊顶进摄像头挖孔。
+    final EdgeInsets safe = MediaQuery.paddingOf(context);
+    final double top = safe.top + 8;
+    final double right = touch ? 8 : 12;
+
+    return Positioned(
+      top: top,
+      right: right,
+      child: MouseRegion(
+        // 鼠标进出只对桌面有意义；触摸端交给 onScrollChanged。
+        onEnter: touch ? null : (_) => _setChrome(1),
+        onExit: touch ? null : (_) => _scheduleChromeFade(),
+        child: AnimatedOpacity(
+          opacity: _chromeOpacity,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          child: IgnorePointer(
+            // 门限放在 0.1：桌面"淡到 35%"那档必须还能点（它只是让位，不是消失），
+            // 只有触摸端真正收起到 0 时才关掉命中测试，免得网页顶上留一块死区。
+            ignoring: _chromeOpacity < 0.1,
+            child: Material(
+              // 刻意不用 BackdropFilter 做毛玻璃：Android 上 WebView 是平台视图、
+              // Windows 上是独立的 WebView2 子窗口，Flutter 的 BackdropFilter
+              // 采样不到底下的网页像素，只会糊出一块死灰。改用高不透明度实色 +
+              // 细描边 + 轻投影，三端观感一致，也没有逐帧采样的开销。
+              color: colors.surface.withValues(alpha: 0.94),
+              surfaceTintColor: Colors.transparent,
+              elevation: 3,
+              shadowColor: Colors.black.withValues(alpha: 0.22),
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(barHeight / 2),
+                side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.7)),
+              ),
+              child: SizedBox(
+                height: barHeight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    // 下载入口留在工具条里（手机拇指热区让给底栏的后退/回家/前进）。
+                    // 浏览页是 push 出来的独立路由，App 级的 ListenableBuilder
+                    // 不会重建它 —— 必须自己监听 state，否则下载一开始角标亮不起来。
+                    ListenableBuilder(
+                      listenable: widget.state,
+                      builder: (BuildContext ctx, Widget? _) {
+                        final int active = widget.state.activeDownloadCount;
+                        return _capsuleButton(
+                          context: context,
+                          tooltip: '下载',
+                          size: buttonSize,
+                          onPressed: () => Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (BuildContext _) => DownloadsPage(state: widget.state),
+                            ),
+                          ),
+                          child: Badge(
+                            isLabelVisible: active > 0,
+                            label: Text('$active'),
+                            child: const Icon(Icons.download_outlined),
+                          ),
+                        );
+                      },
+                    ),
+                    _capsuleButton(
+                      context: context,
+                      tooltip: '刷新',
+                      size: buttonSize,
+                      onPressed: () => _controller?.reload(),
+                      child: const Icon(Icons.refresh),
+                    ),
+                    _capsuleButton(
+                      context: context,
+                      tooltip: '更多',
+                      size: buttonSize,
+                      onPressed: () => _showPageMenu(context),
+                      child: const Icon(Icons.more_vert),
+                    ),
+                  ],
                 ),
-                if (widget.state.branding.showAddressBar)
-                  Text(
-                    displayUrl(_url.isEmpty ? site.startUrl : _url),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurfaceVariant),
-                  ),
-              ],
-            ),
-      actions: <Widget>[
-        // 下载入口放在顶栏（刷新旁）：手机拇指热区留给 后退/回家/前进 三个高频动作，
-        // 下载是低频入口，跟刷新做邻居。底栏因此腾干净（见 _bottomBar）。
-        // 浏览页是 push 出来的路由，App 级的 ListenableBuilder 不会重建它 ——
-        // 必须自己监听 state，否则下载一开始角标永远亮不起来（用户以为没在下载）。
-        ListenableBuilder(
-          listenable: widget.state,
-          builder: (BuildContext ctx, Widget? _) => IconButton(
-            tooltip: '下载',
-            onPressed: () => Navigator.of(context).push<void>(
-              MaterialPageRoute<void>(builder: (BuildContext _) => DownloadsPage(state: widget.state)),
-            ),
-            icon: Badge(
-              isLabelVisible: widget.state.activeDownloadCount > 0,
-              label: Text('${widget.state.activeDownloadCount}'),
-              child: const Icon(Icons.download_outlined),
+              ),
             ),
           ),
         ),
-        IconButton(
-          tooltip: '刷新',
-          onPressed: () => _controller?.reload(),
-          icon: const Icon(Icons.refresh),
-        ),
-        IconButton(
-          tooltip: '更多',
-          onPressed: () => _showPageMenu(context),
-          icon: const Icon(Icons.more_vert),
-        ),
-      ],
-      bottom: _loading
-          ? PreferredSize(
-              preferredSize: const Size.fromHeight(2),
-              child: LinearProgressIndicator(
-                value: _progress <= 0 || _progress >= 1 ? null : _progress,
-                minHeight: 2,
-              ),
-            )
-          : null,
+      ),
     );
+  }
+
+  /// 胶囊里的一个图标按钮。
+  ///
+  /// 刻意不用 `IconButton`：它的最小命中区被硬编码成 48×48
+  /// （`kMinInteractiveDimension`），塞进 40 高的胶囊会直接溢出；用
+  /// `InkResponse` + 定尺 `SizedBox` 才能把视觉尺寸压到 36/40，同时保住
+  /// 圆形水波，而且不依赖 `IconButton.style` 的参数在 Flutter 版本间漂移。
+  Widget _capsuleButton({
+    required BuildContext context,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    required Widget child,
+    required double size,
+  }) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    final Color iconColor = onPressed == null
+        ? colors.onSurfaceVariant.withValues(alpha: 0.35)
+        : colors.onSurfaceVariant;
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 600),
+      child: InkResponse(
+        onTap: onPressed,
+        radius: size * 0.62,
+        containedInkWell: true,
+        highlightShape: BoxShape.circle,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Center(
+            child: IconTheme(
+              data: IconThemeData(size: _isTouch ? 22 : 20, color: iconColor),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 桌面：鼠标离开胶囊 1.5 秒后淡到 35%。
+  ///
+  /// 只在"用完之后"才淡，页面刚打开时不淡 —— 用户第一眼得先看清按钮在哪儿。
+  void _scheduleChromeFade() {
+    _chromeTimer?.cancel();
+    _chromeTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (!mounted) return;
+      _setChrome(0.35);
+    });
+  }
+
+  /// 改工具条不透明度。同值直接返回，避免滚动回调逐帧 setState。
+  void _setChrome(double value) {
+    if (!mounted) return;
+    if ((_chromeOpacity - value).abs() < 0.01) return;
+    setState(() => _chromeOpacity = value);
+  }
+
+  /// 触摸端：往下读 → 收起胶囊；往回滑 / 回到顶部 → 放出胶囊。
+  ///
+  /// 12px 死区是为了不吃手指的轻微抖动（否则轻微回弹就来回闪）；
+  /// `y <= 8` 一律当"到顶"，保证任何时刻往上一滑都能立刻拿回按钮。
+  void _onScrollChanged(InAppWebViewController controller, int x, int y) {
+    if (!_isTouch) return;
+    final int delta = y - _lastScrollY;
+    _lastScrollY = y;
+    if (y <= 8) {
+      _setChrome(1);
+      return;
+    }
+    if (delta > 12) {
+      _setChrome(0);
+    } else if (delta < -12) {
+      _setChrome(1);
+    }
   }
 
   Widget _errorBar(BuildContext context) {
@@ -338,7 +502,7 @@ class _BrowserPageState extends State<BrowserPage> {
     // 手机拇指热区惯例：后退贴左下角、前进贴右下角、回家居中。
     // 用 spaceBetween 让两端真正贴到 BottomAppBar 的两侧边缘，
     // 而不是挤在中间（用户反馈：第一个/第二个挤在一起不符合使用习惯）。
-    // 下载入口已移到顶栏（见 _appBar）。
+    // 下载入口已移到右上角悬浮胶囊（见 _floatingToolbar）。
     return SafeArea(
       top: false,
       child: BottomAppBar(
@@ -437,6 +601,9 @@ class _BrowserPageState extends State<BrowserPage> {
       if (site != null) unawaited(widget.state.clearSiteData(site));
     }
     widget.state.activeController = null;
+    // 工具条淡出的定时器必须在这里掐掉：它持有 this，页面 pop 之后还会往回
+    // setState（虽然被 mounted 挡住，但定时器本身会一直挂着）。
+    _chromeTimer?.cancel();
     _refreshController?.dispose();
     super.dispose();
   }
@@ -805,6 +972,7 @@ class _BrowserPageState extends State<BrowserPage> {
     final SiteProfile? site = _site;
     if (site == null) return;
     final String current = _url.isEmpty ? site.startUrl : _url;
+    final ColorScheme colors = Theme.of(context).colorScheme;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -812,6 +980,38 @@ class _BrowserPageState extends State<BrowserPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
+            // 标题 / 地址从顶栏搬到这儿：胶囊不放文字（一放就又变成"占空间的
+            // 横条"），但"我现在在哪个页面、地址是什么"这个信息不能丢，
+            // 于是改成点「更多」时先看一眼。showAddressBar 的开关语义照旧。
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    _title.isEmpty ? site.displayName : _title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: colors.onSurface,
+                    ),
+                  ),
+                  if (widget.state.branding.showAddressBar)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        displayUrl(current),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.refresh),
               title: const Text('刷新'),

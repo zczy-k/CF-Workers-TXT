@@ -49,6 +49,10 @@ class AppTheme {
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
+        // 默认 56dp（kToolbarHeight）偏胖：标题一行 17 号字 + 48 高的按钮，
+        // 上下各留 4dp 就够。压到 52 之后，设置 / 下载 / 站点编辑这些页
+        // 也跟着一起瘦，浏览页则干脆不用 AppBar 了（见 browser_page 的悬浮胶囊）。
+        toolbarHeight: 52,
         titleTextStyle: TextStyle(
           fontSize: 17,
           fontWeight: FontWeight.w700,

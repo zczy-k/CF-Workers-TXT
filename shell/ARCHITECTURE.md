@@ -93,6 +93,25 @@
 - **本版不做多标签**：一个站点 = 一个浏览页，站点之间用列表切换。原因见 §7 的引擎限制——
   Windows 端多标签要自己管 WebView 池，收益小于复杂度；真要并行开两个站点，现在也能开两个页。
 
+### 浏览页的界面：为什么没有顶栏（悬浮胶囊）
+
+- 顶栏是**布局元素**：它有多高，网页就矮多少。原来的顶栏 56dp（`kToolbarHeight`）+ 2dp 进度条，
+  在直达模式下标题区还是空的 —— 等于白送一条空白带。
+- 现在 `Scaffold` 不带 `appBar`，`body` 是「错误条 + `Stack{ WebView, 进度线, 悬浮胶囊 }` + 底栏」：
+  三个按钮叠在网页右上角，加载进度是贴窗口最上沿的 2dp 细线，两者**都不参与布局**，
+  占用的垂直空间是 0，网页从窗口顶边一直铺到底栏。
+- 平台差异（同一份代码，两套参数）：桌面 40 高 / 单键 36 / 图标 20，鼠标离开 1.5s 淡到 35%
+  但**仍可点击**；手机平板 44 高 / 单键 40 / 图标 22，跟随滚动收起（`onScrollChanged` 判断方向，
+  12px 死区），收起到 0 时才用 `IgnorePointer` 关掉命中测试，避免留死区。
+- **能这么干的前提（查过源码，非推测）**：`flutter_inappwebview_windows` 的 `custom_platform_view`
+  把 WebView2 输出注册成 Flutter `Texture`（`RegisterTexture` / `TextureBridgeGpu` / `Fallback`），
+  不是"子 HWND 盖在 Flutter 上"，所以 **Flutter 控件可以画在网页之上**，不存在 Windows 桌面
+  常见的 airspace 遮挡问题。Android 侧 `useHybridComposition: true` 同样按图层顺序合成。
+- 也因此**没有用 `BackdropFilter` 做毛玻璃**：跨平台采样不稳定且每帧有开销，改用 0.94 不透明度实色 +
+  1px 描边 + `elevation: 3`，三端观感一致。
+- 代价与补偿：顶栏原本承载的"页面标题 / 当前地址"移进胶囊的「更多」弹层顶部（受
+  `branding.showAddressBar` 控制），低频信息改成按需查看，不再常驻占高度。
+
 ### 注入脚本（`lib/src/engine/scripts.dart`）
 
 document-start 注入，只做四件事，且都对失败宽容（单页脚本出错不能拖垮网站）：
@@ -101,7 +120,7 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 2. 给 `fetch` / `XMLHttpRequest` 补自定义请求头（WebView 平台不允许在请求层改内部请求头，
    只能在这一层补；顶层导航由原生带头）；
 3. 长按链接 → 消息桥回原生弹"下载 / 复制 / 用浏览器打开"菜单；
-4. 监听 `fullscreenchange` → 通知原生隐藏顶栏底栏（Windows 没有全屏事件，这条是兜底）。
+4. 监听 `fullscreenchange` → 通知原生隐藏悬浮工具条与底栏（Windows 没有全屏事件，这条是兜底）。
 
 ---
 
