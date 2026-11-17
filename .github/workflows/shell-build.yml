@@ -149,8 +149,19 @@ jobs:
             printf '::error title=%s::%s\n' 'branding 失败' '没找到日志文件，请登录 GitHub 查看'
             exit 0
           fi
+          # 只看 tail 是坑：Gradle 失败时尾部全是线程堆栈和"--stacktrace"提示，
+          # 真正的错因在更上面的 "* What went wrong" 段，纯 tail 正好把它截掉。
+          # 所以先按"错误特征行"捞一遍错因，再补一段较短的 tail 当上下文。
           for f in $(ls -t "${files[@]}" | head -3); do
-            printf '::error title=%s::%s\n' "$(basename "$f") 尾部" "$(tail -c 2500 "$f" | tr '\r\n' '~~')"
+            why=$(awk '/\* What went wrong:/{f=1} f{print; if(++n>28) exit}' "$f")
+            errs=$(grep -aE '(^e: |error:|^FAILURE: Build|Could not resolve|Could not find|Unsupported class file)' "$f" | head -14)
+            diag=$(printf '%s\n%s\n' "$why" "$errs" | sed '/^$/d')
+            if [ -n "$diag" ]; then
+              printf '::error title=%s::%s\n' \
+                "$(basename "$f") 错因" \
+                "$(printf '%s' "$diag" | head -c 2600 | tr '\r\n' '~~')"
+            fi
+            printf '::error title=%s::%s\n' "$(basename "$f") 尾部" "$(tail -c 1200 "$f" | tr '\r\n' '~~')"
           done
 
   # ---------------------------------------------------------------- Android
@@ -291,6 +302,26 @@ jobs:
           fi
           ls -l "$RUNNER_TEMP/ks"
 
+      # 在真正发起构建前把工具链版本钉进日志：仓库里刻意不存 android/，
+      # 脚手架是每次 `flutter create` 现生成的，所以 Flutter stable 一升级，
+      # AGP / Gradle / Kotlin 就跟着变，插件那边可能当场编译不过。出问题时
+      # 这几行是判断"是不是 SDK 漂移"的唯一依据。
+      - name: 工具链快照
+        run: |
+          set -o pipefail
+          {
+            echo "=== flutter ==="
+            flutter --version
+            echo "=== java ==="
+            java -version 2>&1
+            echo "=== gradle-wrapper ==="
+            grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties || true
+            echo "=== settings.gradle 插件版本 ==="
+            grep -nE 'com\.android\.application|org\.jetbrains\.kotlin\.android|id\(' android/settings.gradle* 2>/dev/null | head -20 || true
+            echo "=== app/build.gradle 关键行 ==="
+            grep -nE 'compileSdk|targetSdk|minSdk|proguard|minifyEnabled|shrinkResources|ndkVersion' android/app/build.gradle* 2>/dev/null | head -20 || true
+          } 2>&1 | tee "$RUNNER_TEMP/android-toolchain.log"
+
       - name: 构建 release APK
         run: |
           set -o pipefail
@@ -362,8 +393,19 @@ jobs:
             printf '::error title=%s::%s\n' 'Android 构建失败' '没找到日志文件，请登录 GitHub 查看'
             exit 0
           fi
+          # 只看 tail 是坑：Gradle 失败时尾部全是线程堆栈和"--stacktrace"提示，
+          # 真正的错因在更上面的 "* What went wrong" 段，纯 tail 正好把它截掉。
+          # 所以先按"错误特征行"捞一遍错因，再补一段较短的 tail 当上下文。
           for f in $(ls -t "${files[@]}" | head -3); do
-            printf '::error title=%s::%s\n' "$(basename "$f") 尾部" "$(tail -c 2500 "$f" | tr '\r\n' '~~')"
+            why=$(awk '/\* What went wrong:/{f=1} f{print; if(++n>28) exit}' "$f")
+            errs=$(grep -aE '(^e: |error:|^FAILURE: Build|Could not resolve|Could not find|Unsupported class file)' "$f" | head -14)
+            diag=$(printf '%s\n%s\n' "$why" "$errs" | sed '/^$/d')
+            if [ -n "$diag" ]; then
+              printf '::error title=%s::%s\n' \
+                "$(basename "$f") 错因" \
+                "$(printf '%s' "$diag" | head -c 2600 | tr '\r\n' '~~')"
+            fi
+            printf '::error title=%s::%s\n' "$(basename "$f") 尾部" "$(tail -c 1200 "$f" | tr '\r\n' '~~')"
           done
 
   # ---------------------------------------------------------------- Windows
