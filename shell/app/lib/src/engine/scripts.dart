@@ -40,6 +40,9 @@ String buildBridgeScript(
   Set<String> guessExtensions = kBinaryExtensions,
   bool guessQuery = false,
   bool guessByLabel = false,
+  // 触摸端 WebView 不会内联渲染 blob: PDF，会把预览当下载导航。打开时把
+  // blob 字节回传给原生、交系统 PDF 应用显示（见 browser_page 的 pdfOpen*）。
+  bool pdfPreviewInApp = false,
 }) {
   return _template
       .replaceFirst('__WS_HEADERS__', jsonEncode(site.headers))
@@ -48,7 +51,8 @@ String buildBridgeScript(
         jsonEncode(guessExtensions.toList()..sort()),
       )
       .replaceFirst('__WS_GUESS_QUERY__', guessQuery ? 'true' : 'false')
-      .replaceFirst('__WS_GUESS_LABEL__', guessByLabel ? 'true' : 'false');
+      .replaceFirst('__WS_GUESS_LABEL__', guessByLabel ? 'true' : 'false')
+      .replaceFirst('__WS_PDF_PREVIEW__', pdfPreviewInApp ? 'true' : 'false');
 }
 
 const String _template = r'''
@@ -56,6 +60,7 @@ const String _template = r'''
   if (window.__wsInstalled) { return; }
   window.__wsInstalled = true;
 
+  var OPEN_PDF_IN_APP = __WS_PDF_PREVIEW__;
   var EXTRA_HEADERS = __WS_HEADERS__;
   var GUESS_EXTS = __WS_EXTENSIONS__;
   var GUESS_QUERY = __WS_GUESS_QUERY__;
@@ -221,6 +226,45 @@ const String _template = r'''
       }
     });
   }
+
+  // 触摸端 PDF 预览：`blob:` 的 PDF 在 WebView 里渲染不出来，引擎会把它当下载
+  // 导航。原生拦到这个导航后调这里，把刚 createObjectURL 时缓存的 Blob 分片
+  // 送回去（用独立的 pdfOpen* 通道，不进下载列表），交系统 PDF 应用打开。
+  window.__wsOpenPdf = function (url) {
+    if (!OPEN_PDF_IN_APP) { return false; }
+    function deliver(b) {
+      if (!b) { post('pdfOpenError', { url: url, message: 'PDF 数据已过期，请重新打开' }); return; }
+      var key = newKey(url);
+      post('pdfOpenStart', {
+        url: key, name: '文档预览.pdf', size: b.size, type: b.type || 'application/pdf'
+      });
+      if (!b.size) { post('pdfOpenEnd', { url: key }); return; }
+      var index = 0;
+      function next() {
+        if (index >= b.size) { post('pdfOpenEnd', { url: key }); return; }
+        var end = Math.min(index + CHUNK, b.size);
+        var reader = new FileReader();
+        reader.onload = function () {
+          var text = String(reader.result);
+          post('pdfOpenData', { url: key, data: text.substring(text.indexOf(',') + 1) });
+          index = end;
+          next();
+        };
+        reader.onerror = function () { post('pdfOpenError', { url: key, message: '读取 PDF 失败' }); };
+        reader.readAsDataURL(b.slice(index, end));
+      }
+      next();
+    }
+    var cached = WS_BLOBS[url];
+    if (cached) { deliver(cached); return true; }
+    try {
+      fetch(url).then(function (r) { return r.blob(); }).then(deliver)
+        .catch(function () { post('pdfOpenError', { url: url, message: '读取 PDF 失败' }); });
+    } catch (e) {
+      post('pdfOpenError', { url: url, message: '读取 PDF 失败' });
+    }
+    return true;
+  };
 
   // ---- 1) 接管"点了就该下载"的 <a> ---------------------------------------
   // 返回 true = 已经接管，调用方不要再让默认行为发生。

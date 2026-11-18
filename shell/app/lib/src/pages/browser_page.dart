@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -65,6 +66,14 @@ class _BrowserPageState extends State<BrowserPage> {
   /// Windows 上我们靠"链接像文件"提前把导航掐掉，WebView2 会因此报一个
   /// 导航失败；这张表用来认出"那是我们自己掐的"，别把红条弹给用户。
   final Map<String, int> _interceptedAsDownload = <String, int>{};
+
+  /// 触摸端 PDF 预览的字节缓冲（key → 文件 sink / 路径）。
+  ///
+  /// Android WebView 不会内联渲染 `blob:` 的 PDF，会把预览当下载导航。
+  /// 拦到这种导航后让页面把 Blob 分片送回来，落到临时文件，再交系统 PDF
+  /// 应用打开 —— 全程不进下载列表（用户没点下载，就不该多出一条记录）。
+  final Map<String, IOSink> _pdfSinks = <String, IOSink>{};
+  final Map<String, String> _pdfPaths = <String, String>{};
 
   /// 手机 / 平板。底栏高度按这个分叉：触摸端给拇指留 56，桌面压到 48。
   bool get _isTouch => Platform.isAndroid || Platform.isIOS;
@@ -178,6 +187,8 @@ class _BrowserPageState extends State<BrowserPage> {
                           site,
                           guessQuery: true,
                           guessByLabel: true,
+                          // 触摸端：blob PDF 预览转系统阅读器，别当下载/别留空白
+                          pdfPreviewInApp: _isTouch,
                         ),
                         injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                         forMainFrameOnly: false,
@@ -463,6 +474,9 @@ class _BrowserPageState extends State<BrowserPage> {
       if (site != null) unawaited(widget.state.clearSiteData(site));
     }
     widget.state.activeController = null;
+    for (final String key in _pdfSinks.keys.toList()) {
+      unawaited(_pdfAbort(key));
+    }
     _refreshController?.dispose();
     super.dispose();
   }
@@ -537,6 +551,55 @@ class _BrowserPageState extends State<BrowserPage> {
       handlerName: 'longPressLink',
       callback: (List<dynamic> args) {
         _showLinkMenu(payload(args));
+        return null;
+      },
+    );
+    // PDF 预览字节通道：页面把 blob: PDF 分片送回来，落临时文件后交系统阅读器。
+    // 与 blobStart/blobData/blobEnd 分开 —— 那是"真的下载"，要进下载列表。
+    controller.addJavaScriptHandler(
+      handlerName: 'pdfOpenStart',
+      callback: (List<dynamic> args) async {
+        final Map<String, dynamic> d = payload(args);
+        final String key = (d['url'] as Object?)?.toString() ?? '';
+        final int size = int.tryParse((d['size'] as Object?)?.toString() ?? '') ?? 0;
+        await _pdfStart(key, size);
+        return null;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'pdfOpenData',
+      callback: (List<dynamic> args) {
+        final Map<String, dynamic> d = payload(args);
+        final String key = (d['url'] as Object?)?.toString() ?? '';
+        final String data = (d['data'] as Object?)?.toString() ?? '';
+        if (data.isEmpty) return null;
+        try {
+          _pdfSinks[key]?.add(base64Decode(data));
+        } catch (_) {}
+        return null;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'pdfOpenEnd',
+      callback: (List<dynamic> args) async {
+        final Map<String, dynamic> d = payload(args);
+        final String key = (d['url'] as Object?)?.toString() ?? '';
+        await _pdfFinish(key);
+        return null;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'pdfOpenError',
+      callback: (List<dynamic> args) async {
+        final Map<String, dynamic> d = payload(args);
+        final String key = (d['url'] as Object?)?.toString() ?? '';
+        final String message = (d['message'] as Object?)?.toString() ?? '预览失败';
+        await _pdfAbort(key);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('PDF 预览失败：$message')),
+          );
+        }
         return null;
       },
     );
@@ -664,12 +727,81 @@ class _BrowserPageState extends State<BrowserPage> {
     return false;
   }
 
+  // -------------------------------------------------- PDF 预览（触摸端）
+
+  /// 开一个临时文件接 PDF 字节。放在系统临时目录，不碰下载目录 ——
+  /// 用户没点下载，下载列表和 Download 文件夹都不该多出东西。
+  Future<void> _pdfStart(String key, int size) async {
+    await _pdfAbort(key);
+    if (key.isEmpty) return;
+    try {
+      final Directory dir = await Directory.systemTemp.createTemp('webshell-pdf-');
+      final String path = '${dir.path}${Platform.pathSeparator}preview.pdf';
+      _pdfPaths[key] = path;
+      _pdfSinks[key] = File(path).openWrite();
+    } catch (_) {
+      _pdfPaths.remove(key);
+    }
+  }
+
+  /// 字节收齐 → 关文件 → 调系统 PDF 应用。打开失败时提示，不留垃圾。
+  Future<void> _pdfFinish(String key) async {
+    final IOSink? sink = _pdfSinks.remove(key);
+    final String? path = _pdfPaths.remove(key);
+    if (sink == null || path == null) return;
+    try {
+      await sink.close();
+    } catch (_) {}
+    final String? error = await openLocalFile(path);
+    if (error != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('打开 PDF 失败：$error')),
+      );
+    }
+  }
+
+  /// 出错 / 重开：丢掉半成品，删临时文件。
+  Future<void> _pdfAbort(String key) async {
+    final IOSink? sink = _pdfSinks.remove(key);
+    final String? path = _pdfPaths.remove(key);
+    if (sink != null) {
+      try {
+        await sink.close();
+      } catch (_) {}
+    }
+    if (path != null) {
+      try {
+        final File f = File(path);
+        if (f.existsSync()) await f.delete();
+        final Directory parent = f.parent;
+        if (parent.existsSync()) await parent.delete();
+      } catch (_) {}
+    }
+  }
+
   Future<void> _onDownloadStart(
     InAppWebViewController controller,
     DownloadStartRequest request,
   ) async {
+    final String url = request.url.toString();
+    final String mime = (request.mimeType ?? '').toLowerCase();
+    final String name = (request.suggestedFilename ?? '').toLowerCase();
+
+    // 触摸端 PDF 预览：站点把 PDF 读成 blob 塞进 <iframe src="blob:…">，
+    // Android WebView 渲染不了 PDF，直接把它当下载导航，于是"没点下载却下了一堆"。
+    // 这里认出 blob: + PDF，拦下来让页面把字节送回来交系统阅读器，不入下载队列。
+    if (_isTouch &&
+        url.startsWith('blob:') &&
+        (mime.contains('pdf') || name.endsWith('.pdf'))) {
+      final String js = 'window.__wsOpenPdf && window.__wsOpenPdf(${jsonEncode(url)})';
+      try {
+        await controller.evaluateJavascript(source: js);
+      } catch (_) {}
+      return;
+    }
+
     _enqueueDownload(
-      request.url.toString(),
+      url,
       suggestedName: request.suggestedFilename,
     );
   }
