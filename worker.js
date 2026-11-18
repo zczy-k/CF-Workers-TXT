@@ -3174,13 +3174,14 @@ padding:7px 10px;border-radius:7px;font-size:13px;color:#1f2328;cursor:pointer;f
 margin-left:14px}
 .tkids.open{grid-template-rows:1fr}
 .tkids-in{overflow:hidden;min-height:0}
-/* 目录树分区：受保护 / 普通文件夹各占一个带边框的独立板块 */
+/* 目录树分区板块 */
 .tsec{border:1px solid #e0e4e9;border-radius:9px;margin:5px 2px 7px 0;padding:3px 3px 4px;background:#fbfcfd}
 .tsec-t{font-size:11px;font-weight:700;color:#57606a;padding:3px 8px 5px;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tsec-c{margin-left:6px;font-weight:400;color:#8c959f}
-.tsec-prot{border-color:#e3c46a;background:#fffdf3;box-shadow:0 0 0 1px #f5e9c8}
+/* 受保护板块：跟普通板块同一套中性浅底，只靠标题的小锁与琥珀色文字区分 */
+.tsec-prot{border-color:#e0e4e9;background:#fbfcfd;box-shadow:none}
 .tsec-prot .tsec-t{color:#9a6700}
-.tsec-prot .tsec-c{color:#b08a2e}
+.tsec-prot .tsec-c{color:#a9882e}
 .sfile{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:7px;cursor:pointer;font-size:13px}
 .sfile:hover{background:#f3f4f6}
 .sfile.cur{background:#eaf3fe;color:#0969da}
@@ -3314,12 +3315,10 @@ flex:0 0 auto;margin-left:6px}
 border:0;background:transparent;padding:2px;border-radius:5px;cursor:pointer;font:inherit}
 .shdot:hover{background:#e6f4ea;color:#0d5c22}
 .shdot:focus-visible{outline:2px solid #1a7f37;outline-offset:1px}
-/* 受保护文件夹：列表里的红色锁徽标 + 行左侧金色色条，一眼可辨 */
-.prot{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:1px 7px;border-radius:999px;background:#fdecea;color:#c0392b;font-size:11px;font-weight:600;border:1px solid #f3b7b3;vertical-align:middle;white-space:nowrap}
-.prot-row{background:#fffdf5}
-.prot-row:hover{background:#fff8e6}
-.prot-row>td:first-child{box-shadow:inset 3px 0 0 #e0a800}
-.tprot{flex:0 0 auto;margin-left:4px;font-size:11px;line-height:1}
+/* 受保护：颜色只留在「分区标题文字 + 带锁文件夹图标」两处，行内不再堆叠徽章/色条 */
+.prot-row{background:transparent}
+.prot-row:hover{background:#f6f8fa}
+.tprot{flex:0 0 auto;margin-left:4px;font-size:11px;line-height:1;color:#b58900}
 /* 列表分区栏：把「受保护」与「普通」文件夹分成两条带 */
 /* 主列表分区栏：整幅色带 + 左侧粗色条 + 板块间白色隔离带，两个区间一眼分开 */
 .sect>td{padding:0;border-top:0;border-bottom:0}
@@ -3327,7 +3326,7 @@ tbody>.sect:not(:first-child)>td{border-top:12px solid #fff}
 .sect .band{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#edf0f3;border-top:1px solid #d8dde3;border-bottom:2px solid #cfd5db;border-left:7px solid #6b7280}
 .sect-t{font-size:13px;font-weight:700;color:#37414c;letter-spacing:.02em}
 .sect-h{margin-left:8px;font-size:11.5px;color:#6b7480;font-weight:400}
-.sect-prot .band{background:#fdf3d0;border-top-color:#e8cd85;border-bottom-color:#dfba5c;border-left-color:#d4a017}
+.sect-prot .band{background:#edf0f3;border-top-color:#d8dde3;border-bottom-color:#cfd5db;border-left-color:#b58900}
 .sect-prot .sect-t{color:#8a5f00}
 .sect-prot .sect-h{color:#a07c1f}
 .mgrGrp{margin-top:14px;border:1px solid #e3e6ea;border-radius:9px;overflow:hidden}
@@ -4240,7 +4239,7 @@ function rowHtml(node, isDir, hasKids, open){
     h += '<span class="tico f">' + ICON_FILE + '</span>';
   }
   h += '<span class="tname" title="' + E(node.p || node.n) + '">' + E(node.n) + '</span>';
-  if (isDir && !RO && (node.pr || (p && treeProtected[p]))) h += '<span class="tprot" title="受保护文件夹：删除需要管理员密码，取消保护也要密码">🔒</span>';
+  // 受保护状态已由带锁文件夹图标表达，行尾不再重复挂 🔒
   if (!isDir) h += extBadge(node.n);
   h += shDot(node.p);
   if (isDir){
@@ -4274,19 +4273,13 @@ function kidsHtml(node){
     if (isProtDir(node.d[i])) prot.push(node.d[i]); else norm.push(node.d[i]);
   }
   if (prot.length){
-    h += '<div class="tsec tsec-prot"><div class="tsec-t">🔒 受保护<span class="tsec-c">' + prot.length + '</span></div>';
+    h += '<div class="tsec tsec-prot"><div class="tsec-t" title="受保护文件夹：删除与解除保护都需要管理员密码">🔒 受保护<span class="tsec-c">' + prot.length + '</span></div>';
     for (k = 0; k < prot.length; k++) h += dirNodeHtml(prot[k]);
     h += '</div>';
   }
   if (norm.length){
-    if (prot.length){
-      // 只有当受保护板块存在时，普通文件夹才需要自己的板块；否则保持原样，避免满屏框线
-      h += '<div class="tsec tsec-norm"><div class="tsec-t">📁 普通文件夹<span class="tsec-c">' + norm.length + '</span></div>';
-      for (k = 0; k < norm.length; k++) h += dirNodeHtml(norm[k]);
-      h += '</div>';
-    } else {
-      for (k = 0; k < norm.length; k++) h += dirNodeHtml(norm[k]);
-    }
+    // 受保护板块存在时普通文件夹直接平铺，不再另起一个「📁 普通文件夹」板块标题
+    for (k = 0; k < norm.length; k++) h += dirNodeHtml(norm[k]);
   }
   for (var j = 0; j < node.f.length; j++){
     h += '<div class="tnode" data-n="' + E(node.f[j].n) + '">' + rowHtml(node.f[j], false, false, false) + '</div>';
@@ -5317,11 +5310,14 @@ function renderList(){
   // 单个文件夹行
   function folderRow(nm, isProt){
     var fullNm = joinPath(state.path, nm);
-    var protMark = isProt ? '<span class="prot" title="受保护文件夹：删除里面的文件需要管理员密码，取消保护也要密码">🔒 受保护</span>' : '';
-    return '<tr' + (isProt ? ' class="prot-row"' : '') + '>' +
-      '<td><div class="nm">' + ckHtml(nm, true) + '<span class="ico dir">' + dirIcon(fullNm, false, isProt) + '</span>' +
+    // 受保护状态只靠「分区标题 + 金色带锁文件夹图标」表达，不再逐行挂文字徽章。
+    // 说明文字挪进图标 title：界面上不常驻，但鼠标悬停仍查得到。
+    return '<tr>' +
+      '<td><div class="nm">' + ckHtml(nm, true) +
+      '<span class="ico dir"' + (isProt ? ' title="受保护文件夹：删除与解除保护都需要管理员密码"' : '') + '>' +
+      dirIcon(fullNm, false, isProt) + '</span>' +
       '<a class="link" href="#" data-open="' + E(nm) + '" data-type="dir">' + E(nm) + '</a>' +
-      protMark + shBadge(fullNm, true) + '</div></td>' +
+      shBadge(fullNm, true) + '</div></td>' +
       '<td class="hide-s" style="color:#8c959f">文件夹</td>' +
       '<td class="hide-s"></td><td class="hide-s"></td>' +
       '<td><button class="tact" data-tact="1" data-p="' + E(fullNm) + '" data-dir="1" title="操作：打开 / 下载 / 分享 / 重命名 / 移动 / 删除">' + ICON_MORE + '</button></td></tr>';
@@ -5340,10 +5336,10 @@ function renderList(){
     else normFolders.push(nm0);
   }
   if (protFolders.length){
-    rows += sectRow('🔒 受保护文件夹', protFolders.length + ' 项 · 删除与解除保护都需要管理员密码', 'sect-prot');
+    rows += sectRow('🔒 受保护 · ' + protFolders.length, '', 'sect-prot');
     for (var pf = 0; pf < protFolders.length; pf++) rows += folderRow(protFolders[pf], true);
-    if (normFolders.length) rows += sectRow('📁 普通文件夹', normFolders.length + ' 项');
   }
+  // 普通文件夹直接平铺在后面，不再单起一条「📁 普通文件夹」通栏色带
   for (var nf = 0; nf < normFolders.length; nf++) rows += folderRow(normFolders[nf], false);
   for (var k = 0; k < state.files.length; k++){
     var it = state.files[k];
