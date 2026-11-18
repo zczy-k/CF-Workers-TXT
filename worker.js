@@ -3357,6 +3357,14 @@ input[type=text]:focus,input[type=password]:focus{outline:none;border-color:#1f6
 .dlg.sm{max-width:440px}
 .dlg h3{margin:0 0 12px;font-size:15px}
 .dlg .body{overflow:auto;min-height:0}
+/* PDF 预览：默认 .dlg 的 780px 上限会把 A4 竖版挤到 32% 才看全宽，下方一大截空白。
+   .media 把弹窗拉到接近视口，iframe 撑满剩余高度，PDF 才能放大看清。 */
+.dlg.media{max-width:96vw;width:96vw;height:92vh}
+.dlg.media .body{flex:1 1 auto;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.dlg.media .mediaBar{flex:0 0 auto}
+.dlg.media #mbBox{flex:1 1 auto;display:flex;min-height:0}
+.dlg.media .frameBox{flex:1 1 auto;min-height:0;height:100%}
+.dlg.media .frameBox iframe{height:100%;min-height:0}
 .dlg .body textarea{width:100%;height:44vh;border:1px solid #d0d7de;border-radius:8px;padding:10px;font-size:13px;resize:vertical;
 font-family:ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.6}
 .dlg .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex:0 0 auto}
@@ -7947,18 +7955,22 @@ function openMediaModal(path, name){
   showModal({
     title: name || path.split('/').pop(),
     noOk: true, cancelText: '关闭',
+    cls: (kind === 'pdf' || kind === 'html') ? 'media' : '',
     body: '<div class="mediaBar">' +
       '<span class="rawNote" style="margin:0;flex:1" id="mbInfo">载入中…</span>' +
       (kind === 'image' ? '<button class="btn sm" id="mbOut">缩小</button>' +
         '<button class="btn sm" id="mbIn">放大</button>' +
         '<button class="btn sm" id="mbRot">旋转</button>' +
         '<button class="btn sm" id="mbRst">复位</button>' : '') +
+      (kind === 'pdf' || kind === 'html' ? '<button class="btn sm" id="mbTab">新标签全屏看</button>' : '') +
       '<button class="btn sm" id="mbDl">下载</button>' +
       '</div><div id="mbBox"></div>',
     after: function(){
       var box = document.getElementById('mbBox');
       var info = document.getElementById('mbInfo');
       document.getElementById('mbDl').onclick = function(){ location.href = dlUrl('', path); };
+      var mbTab = document.getElementById('mbTab');
+      if (mbTab) mbTab.onclick = function(){ window.open(mediaUrl, '_blank'); };
       req(BASE + '/api?action=raw&path=' + encodeURIComponent(path)).then(function(r){
         if (!r.ok) throw new Error('HTTP ' + r.status);
         var ct = r.headers.get('Content-Type') || '';
@@ -7994,7 +8006,7 @@ function openMediaModal(path, name){
             info.textContent = fmtSize(o.b.size) + (av.duration ? ' · 时长 ' + Math.round(av.duration) + ' 秒' : '');
           };
         } else if (kind === 'pdf'){
-          box.innerHTML = '<div class="frameBox" style="min-height:66vh"><iframe id="mbF"></iframe></div>';
+          box.innerHTML = '<div class="frameBox"><iframe id="mbF" title="PDF 预览"></iframe></div>';
           info.textContent = fmtSize(o.b.size) + ' · PDF';
           document.getElementById('mbF').src = mediaUrl;
         } else {
@@ -9226,7 +9238,7 @@ var okHandler = null;
 function showModal(opt){
   document.getElementById('mTitle').textContent = opt.title;
   document.getElementById('mBody').innerHTML = opt.body || '';
-  mDlg.className = 'dlg' + (opt.small ? ' sm' : '');
+  mDlg.className = 'dlg' + (opt.small ? ' sm' : '') + (opt.cls ? ' ' + opt.cls : '');
   mOk.textContent = opt.okText || '确定';
   mOk.style.display = opt.noOk ? 'none' : '';
   mCancel.textContent = opt.cancelText || '取消';
