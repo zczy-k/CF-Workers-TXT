@@ -375,10 +375,74 @@ jobs:
             grep -nE 'compileSdk|targetSdk|minSdk|proguard|minifyEnabled|shrinkResources|ndkVersion' android/app/build.gradle* 2>/dev/null | head -20 || true
           } 2>&1 | tee "$RUNNER_TEMP/android-toolchain.log"
 
+      # Gradle 编译 `.gradle.kts` 时会创建一个内部虚拟项目 `:gradle`，它的
+      # buildscript **默认只问 plugins.gradle.org 一个源**。那个镜像一旦缺某个
+      # 版本，构建会在"配插件"这一步就死，连 compileReleaseKotlin 都到不了。
+      # 真事（2026-11-19）：Gradle 9.5.0 内置的 gradle-kotlin-dsl-plugins 6.5.7
+      # 依赖 org.jetbrains.kotlin:kotlin-stdlib:2.3.20，而 plugins.gradle.org 上
+      # 那个版本的 POM 拉不到 → 报 "Could not find kotlin-stdlib:2.3.20"。
+      # 该版本在 Maven Central 上是有的，所以这里给所有 buildscript 与 project
+      # 补上 Maven Central / Google / 阿里云镜像，别让它只吊在一根绳上。
+      - name: 给 Gradle 补多仓库兜底（init script）
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          cat > "$HOME/.gradle/init.d/00-mirrors.gradle" <<'GRADLE'
+          def mirrors = [
+              'https://maven.aliyun.com/repository/public',
+              'https://maven.aliyun.com/repository/google',
+              'https://maven.aliyun.com/repository/gradle-plugin',
+          ]
+
+          beforeSettings { settings ->
+              settings.pluginManagement.repositories {
+                  google()
+                  mavenCentral()
+                  mirrors.each { u -> maven { url = u } }
+                  gradlePluginPortal()
+              }
+              settings.dependencyResolutionManagement.repositories {
+                  google()
+                  mavenCentral()
+                  mirrors.each { u -> maven { url = u } }
+              }
+          }
+
+          allprojects { p ->
+              p.buildscript.repositories {
+                  google()
+                  mavenCentral()
+                  mirrors.each { u -> maven { url = u } }
+              }
+              p.repositories {
+                  google()
+                  mavenCentral()
+                  mirrors.each { u -> maven { url = u } }
+              }
+          }
+          GRADLE
+          echo "已写入 $HOME/.gradle/init.d/00-mirrors.gradle"
+          cat "$HOME/.gradle/init.d/00-mirrors.gradle"
+
+      # 网络抖动（镜像 429/502 返回 HTML 而不给 POM）是这类失败最常见的推手：
+      # 报错"says Could not parse POM"，重试一次就好了。所以给它 3 次机会，
+      # 每次先清掉可能被写坏的 kotlin 依赖缓存块（半截 .pom 会一直"存在但坏"）。
       - name: 构建 release APK
         run: |
           set -o pipefail
-          flutter build apk --release 2>&1 | tee "$RUNNER_TEMP/android-build.log"
+          for attempt in 1 2 3; do
+            echo "===== 第 $attempt 次 flutter build apk ====="
+            if flutter build apk --release 2>&1 | tee "$RUNNER_TEMP/android-build.log"; then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then break; fi
+            echo "第 $attempt 次失败，清掉 Kotlin 依赖缓存后重试（10s）"
+            rm -rf "$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin" \
+                   "$HOME/.gradle/caches/modules-2/files-2.1/org.gradle.kotlin" \
+                   "$HOME/.gradle/caches/modules-2/metadata-2."* 2>/dev/null || true
+            sleep 10
+          done
+          echo '::error title=APK 构建失败::三次都失败，看上面日志里第一个 "What went wrong" 段'
+          exit 1
 
       # flutter build 出来的是 debug-key 签的 APK（模板默认）。用上面解出的固定
       # 密钥重签：zipalign 4 字节对齐 → apksigner 签名（v1+v2+v3 全开，Android
