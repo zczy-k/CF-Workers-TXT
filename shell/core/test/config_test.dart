@@ -138,7 +138,7 @@ void main() {
         },
       ));
       expect(c.sites, hasLength(3));
-      expect(c.sites.map((SiteProfile s) => s.name), <String>['OA', '邮箱', '笔记']);
+      expect(c.sites.map((SiteProfile s) => s.name).toList(), <String>['OA', '邮箱', '笔记']);
       expect(c.activeSiteId, c.sites.first.id);
     });
 
