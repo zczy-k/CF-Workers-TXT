@@ -226,6 +226,8 @@ jobs:
           {
             cp -r "$RUNNER_TEMP/branding/android-res/." android/app/src/main/res/
             cp "$RUNNER_TEMP/branding/preset.json" assets/preset.json
+            # 托盘图标（桌面端用；Android 不打托盘，但保持两端资产口径一致）
+            cp "$RUNNER_TEMP/branding/app_icon.ico" assets/tray_icon.ico
             python3 "$GITHUB_WORKSPACE/shell/tools/patch_platform.py" \
               manifest android/app/src/main/AndroidManifest.xml "$APP_NAME_EFFECTIVE"
             # 下载通知/前台服务：Kotlin + manifest 权限，全平台 API 零新依赖
@@ -487,6 +489,10 @@ jobs:
             $lines.Add("APP_NAME_EFFECTIVE=$env:APP_NAME_EFFECTIVE  APP_ID_EFFECTIVE=$env:APP_ID_EFFECTIVE")
 
             Copy-Item "$env:RUNNER_TEMP\branding\app_icon.ico" "windows\runner\resources\app_icon.ico" -Force -ErrorAction Stop
+            # 托盘图标是**另一份**资产（assets/tray_icon.ico，pubspec 里单独声明，
+            # 由 tray_manager 从包内读出来解到数据目录）。以前只换 exe 图标不换它，
+            # 结果就是"窗口/exe/界面左上角都是新图标，唯独托盘还是仓库里那张旧图"。
+            Copy-Item "$env:RUNNER_TEMP\branding\app_icon.ico" "assets\tray_icon.ico" -Force -ErrorAction Stop
             Copy-Item "$env:RUNNER_TEMP\branding\preset.json" "assets\preset.json" -Force -ErrorAction Stop
 
             # runner 上 python / py / python3 到底哪个能用不一定，而且必须**真跑一次**才算数：

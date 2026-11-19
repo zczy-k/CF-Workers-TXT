@@ -519,7 +519,7 @@ class _BrowserPageState extends State<BrowserPage> {
     final String own = (site.userAgent ?? '').trim();
     if (own.isNotEmpty) return own;
     if (!_isTouch) return null;
-    final String base = widget.state.engineUserAgent.trim();
+    final String base = (widget.state.engineUserAgent ?? '').trim();
     if (base.isEmpty) return null;
     return base.replaceAll('; wv', '');
   }
