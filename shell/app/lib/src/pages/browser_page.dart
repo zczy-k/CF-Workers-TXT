@@ -509,7 +509,7 @@ class _BrowserPageState extends State<BrowserPage> {
   ///   `Mozilla/5.0 (Linux; Android 14; Pixel 7; wv) AppleWebKit/537.36 … Mobile Safari/537.36`
   /// 那个 `; wv` 是"我在 WebView 里"的公开标记，Cloudflare 的 Bot Management
   /// 见到它直接把风险分拉满，站点就会把用户按在 Managed Challenge 上反复验证
-  /// （example.com 手机端卡死就是这么来的；WebView2 的 UA 不带 wv，所以
+  /// （实测某订阅站手机端就是被这么卡死的；WebView2 的 UA 不带 wv，所以
   /// 同一个站点电脑端直接进）。
   ///
   /// 只删 `; wv` 这一段，其余原样保留 —— 还是同一台设备、同一个 Chrome 版本、
