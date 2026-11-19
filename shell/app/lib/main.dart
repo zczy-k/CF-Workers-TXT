@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:webshell_core/webshell_core.dart';
 
 import 'src/app.dart';
@@ -30,6 +31,21 @@ Future<void> main() async {
   }
 
   final ShellState state = await ShellState.create(branding);
+
+  // 先把引擎的原生 UA 取一份存进 state。
+  //
+  // 目的是让浏览页能派生一个"去掉 `; wv` 标记"的 UA（见 browser_page 的
+  // _effectiveUa）：那个标记等于自报"我在 WebView 里"，Cloudflare 一类风控
+  // 见到就上强制人机验证，站点会在手机上无限挑战、还提示设备时间不对。
+  // 必须在 runApp 之前取到 —— WebView 的 settings 是建的时候就定死的，
+  // 等 onWebViewCreated 再改就得整页 reload 一次。
+  // 取不到就留空，浏览页回退到引擎自己的 UA，绝不因为这一层拖慢启动。
+  if (Platform.isAndroid || Platform.isIOS) {
+    try {
+      final String ua = await InAppWebViewController.getDefaultUserAgent();
+      if (ua.isNotEmpty) state.engineUserAgent = ua;
+    } catch (_) {}
+  }
 
   // Android：下载进度通知 + 下载期间前台保活（其他平台 attach 内部 no-op）。
   DownloadNotifier.instance.attach(state);

@@ -306,6 +306,12 @@ class _BrowserPageState extends State<BrowserPage> {
   /// 也就永远不会有"挡着别人按钮"这种事。代价只是底部固定几十 dp，
   /// 换来的是零概率的遮挡 —— 这个交换对笔记类站点明显划算。
   Widget _bottomBar(BuildContext context) {
+    // 「站点列表」只在真有列表页的时候出现。
+    // singleSiteMode = 白标包 + 预置恰好一个站点 + 禁止加站 —— 此时
+    // BrowserPage 本身就是根路由（见 app.dart 的 _homeFor），背后没有列表页，
+    // 按钮按下去只会是死键。用户的要求也是"单网站不要显示"。
+    final bool showSiteList = !widget.state.branding.singleSiteMode;
+
     // 手机拇指热区惯例：导航键贴左侧、功能键贴右侧，中间留空。
     // 触摸端 56dp、桌面 48dp：鼠标是精确指针，48 已经够点；手指需要更多余量。
     return SafeArea(
@@ -324,13 +330,26 @@ class _BrowserPageState extends State<BrowserPage> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    IconButton(
+                    // 返回站点列表：**必须放在最左**，语义上"退出当前站点"比
+                    // "后退一页"更靠外层。桌面端以前根本没有这个出口 ——
+                    // 底栏的后退键走的是网页历史，走到底之后就再也回不到列表，
+                    // 只能关掉窗口重开（这也是用户报"电脑版没法返回列表"的原因）。
+                    if (showSiteList)
+                      _barIcon(
+                        tooltip: '站点列表',
+                        icon: Icons.apps,
+                        // maybePop：根路由时什么都不做，不会崩；正常情况下它
+                        // 上面一定是 HomePage。
+                        onPressed: () => Navigator.of(context).maybePop(),
+                      ),
+                    _barIcon(
                       tooltip: '后退',
+                      icon: Icons.arrow_back,
                       onPressed: _canGoBack ? () => _controller?.goBack() : null,
-                      icon: const Icon(Icons.arrow_back),
                     ),
-                    IconButton(
+                    _barIcon(
                       tooltip: '回到首页',
+                      icon: Icons.home_outlined,
                       onPressed: () {
                         final SiteProfile? site = _site;
                         if (site != null) {
@@ -339,12 +358,11 @@ class _BrowserPageState extends State<BrowserPage> {
                           );
                         }
                       },
-                      icon: const Icon(Icons.home_outlined),
                     ),
-                    IconButton(
+                    _barIcon(
                       tooltip: '前进',
+                      icon: Icons.arrow_forward,
                       onPressed: _canForward ? () => _controller?.goForward() : null,
-                      icon: const Icon(Icons.arrow_forward),
                     ),
                   ],
                 ),
@@ -357,7 +375,7 @@ class _BrowserPageState extends State<BrowserPage> {
                       listenable: widget.state,
                       builder: (BuildContext ctx, Widget? _) {
                         final int active = widget.state.activeDownloadCount;
-                        return IconButton(
+                        return _barIcon(
                           tooltip: '下载',
                           onPressed: () => Navigator.of(context).push<void>(
                             MaterialPageRoute<void>(
@@ -365,7 +383,7 @@ class _BrowserPageState extends State<BrowserPage> {
                                   DownloadsPage(state: widget.state),
                             ),
                           ),
-                          icon: Badge(
+                          iconWidget: Badge(
                             isLabelVisible: active > 0,
                             label: Text('$active'),
                             child: const Icon(Icons.download_outlined),
@@ -373,15 +391,15 @@ class _BrowserPageState extends State<BrowserPage> {
                         );
                       },
                     ),
-                    IconButton(
+                    _barIcon(
                       tooltip: '刷新',
+                      icon: Icons.refresh,
                       onPressed: () => _controller?.reload(),
-                      icon: const Icon(Icons.refresh),
                     ),
-                    IconButton(
+                    _barIcon(
                       tooltip: '更多',
+                      icon: Icons.more_vert,
                       onPressed: () => _showPageMenu(context),
-                      icon: const Icon(Icons.more_vert),
                     ),
                   ],
                 ),
@@ -408,10 +426,31 @@ class _BrowserPageState extends State<BrowserPage> {
     );
   }
 
+  /// 底栏上的一个图标按钮。
+  ///
+  /// 命中区从 IconButton 默认的 48dp 收到 44（触摸端）/ 40（桌面），不是随手
+  /// 缩的：多站点模式底栏有 7 个按钮，7×48 = 336 —— 360dp 的窄屏刚好卡死，
+  /// 320dp（iPhone SE 一类老机型）直接 RenderFlex overflow 报红条。
+  /// 44 仍在 Material 触摸尺寸下限附近，手指点得中；7×44 = 308 留出余量。
+  Widget _barIcon({
+    required String tooltip,
+    required VoidCallback? onPressed,
+    IconData? icon,
+    Widget? iconWidget,
+  }) {
+    final double size = _isTouch ? 44 : 40;
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: iconWidget ?? Icon(icon),
+      padding: EdgeInsets.zero,
+      constraints: BoxConstraints.tightFor(width: size, height: size),
+    );
+  }
+
   // ---------------------------------------------------------------- 引擎配置
 
   InAppWebViewSettings _settings(SiteProfile site) {
-    final String ua = (site.userAgent ?? '').trim();
     return InAppWebViewSettings(
       javaScriptEnabled: true,
       javaScriptCanOpenWindowsAutomatically: true,
@@ -427,11 +466,22 @@ class _BrowserPageState extends State<BrowserPage> {
       // 用户关掉"保持登录"时改用无痕会话：Cookie / localStorage 都不落盘，
       // 重开 App 天然是未登录状态（和系统浏览器的"隐私模式"一致）。
       incognito: !widget.state.config.saveLogin,
-      // 缓存策略：有缓存就用缓存、没有才走网络。WebView 默认的 LOAD_DEFAULT
-      // 每次都回源验证（304 也要等一个来回），用户感知就是"每次重开 App 都卡一下
-      // 重新加载"。LOAD_CACHE_ELSE_NETWORK 让二次打开直接吃本地缓存、秒出。
-      // "保持登录"关掉时 incognito 已经把缓存一并禁了，不受这里影响。
-      cacheMode: CacheMode.LOAD_CACHE_ELSE_NETWORK,
+      // 缓存策略：优先吃 HTTP 缓存，但**必须回源校验**。
+      //
+      // 这里曾经是 LOAD_CACHE_ELSE_NETWORK（"有缓存就不回源"），看着更快，
+      // 代价是 Cloudflare 一类挑战站会彻底卡死：挑战流程是
+      //   页面 → 302 /cdn-cgi/challenge-platform/…/orchestrate/jsch/v1?ray=…
+      //   → JS 生成带 ray id + 时间戳的 token → 回传校验
+      // 缓存策略把 orchestrator 脚本和挑战页整段复用，token 里的时间戳早就过期，
+      // 服务端校验必然失败，Cloudflare 就把它归类成"客户端状态/时钟不对"，
+      // 于是无限重开挑战 —— 用户看到的就是"一直要验证，还说我设备时间不正确"。
+      //
+      // 为什么只有手机中招：`cacheMode` 是 Android WebView 的专有设置，
+      // WebView2（Windows）根本不认这一项，走自己的 HTTP 缓存。同一个站点
+      // 电脑能进、手机进不去，根子就在这。
+      //
+      // LOAD_DEFAULT 一样吃 HTTP 缓存（304 很便宜），正确性优先。
+      cacheMode: CacheMode.LOAD_DEFAULT,
       // 安全第一：不允许网页通过 file:// 读本机文件；上传走系统文件选择器，不受影响
       allowFileAccess: false,
       allowContentAccess: false,
@@ -447,9 +497,31 @@ class _BrowserPageState extends State<BrowserPage> {
       loadWithOverviewMode: true,
       verticalScrollBarEnabled: false,
       displayZoomControls: false,
-      userAgent: ua.isEmpty ? null : ua,
+      userAgent: _effectiveUa(site),
       isInspectable: kDebugMode,
     );
+  }
+
+  /// 真正要用的 User-Agent：站点自己填了就用站点的，否则触摸端用「去掉 `wv` 标记」
+  /// 的原生 UA。
+  ///
+  /// Android System WebView 的默认 UA 长这样：
+  ///   `Mozilla/5.0 (Linux; Android 14; Pixel 7; wv) AppleWebKit/537.36 … Mobile Safari/537.36`
+  /// 那个 `; wv` 是"我在 WebView 里"的公开标记，Cloudflare 的 Bot Management
+  /// 见到它直接把风险分拉满，站点就会把用户按在 Managed Challenge 上反复验证
+  /// （example.com 手机端卡死就是这么来的；WebView2 的 UA 不带 wv，所以
+  /// 同一个站点电脑端直接进）。
+  ///
+  /// 只删 `; wv` 这一段，其余原样保留 —— 还是同一台设备、同一个 Chrome 版本、
+  /// 同一个 `Mobile Safari`，站点不会因此给桌面版页面。
+  /// 桌面端返回 null，让各平台用自己的原生 UA（WebView2 本来就干净）。
+  String? _effectiveUa(SiteProfile site) {
+    final String own = (site.userAgent ?? '').trim();
+    if (own.isNotEmpty) return own;
+    if (!_isTouch) return null;
+    final String base = widget.state.engineUserAgent.trim();
+    if (base.isEmpty) return null;
+    return base.replaceAll('; wv', '');
   }
 
   /// 顶层导航能带的头；页面内部请求由注入脚本补（WebView 平台不让改内部请求头）。
@@ -460,8 +532,8 @@ class _BrowserPageState extends State<BrowserPage> {
       if (kForbiddenHeaderNames.contains(key.toLowerCase())) return;
       headers[key] = value;
     });
-    final String ua = (site.userAgent ?? '').trim();
-    if (ua.isNotEmpty) headers['User-Agent'] = ua;
+    final String? ua = _effectiveUa(site);
+    if (ua != null && ua.isNotEmpty) headers['User-Agent'] = ua;
     return headers;
   }
 

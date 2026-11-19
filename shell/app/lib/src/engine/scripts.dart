@@ -58,6 +58,22 @@ String buildBridgeScript(
 const String _template = r'''
 (function () {
   if (window.__wsInstalled) { return; }
+
+  // Cloudflare 的人机验证（Turnstile）跑在跨域 iframe 里，而且它自己也在用
+  // Blob / Worker / 动态 <a>.click() / window.open —— 正是我们这套 hook 的
+  // 目标。挂进去只会把它内部逻辑搞坏，用户看到的就是"验证永远转不过去"
+  // 或者干脆报设备时间不对。挑战页也不需要下载、长按菜单、全屏这些能力，
+  // 所以整条挑战路径一个字节都不注入。
+  var WS_SKIP_HOSTS = ['challenges.cloudflare.com', 'cloudflareinsights.com'];
+  var wsHost = (location.hostname || '').toLowerCase();
+  for (var wi = 0; wi < WS_SKIP_HOSTS.length; wi++) {
+    if (wsHost === WS_SKIP_HOSTS[wi]) { return; }
+  }
+  // 拿到别的 CF 子域（static.cloudflareinsights.com 之类）一并放过
+  if (/\.cloudflare\.com$/.test(wsHost)) { return; }
+  // 同域的挑战编排页：example.com/cdn-cgi/challenge-platform/…
+  if ((location.pathname || '').indexOf('/cdn-cgi/') === 0) { return; }
+
   window.__wsInstalled = true;
 
   var OPEN_PDF_IN_APP = __WS_PDF_PREVIEW__;
