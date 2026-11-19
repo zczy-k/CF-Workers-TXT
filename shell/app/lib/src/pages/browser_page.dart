@@ -330,18 +330,6 @@ class _BrowserPageState extends State<BrowserPage> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    // 返回站点列表：**必须放在最左**，语义上"退出当前站点"比
-                    // "后退一页"更靠外层。桌面端以前根本没有这个出口 ——
-                    // 底栏的后退键走的是网页历史，走到底之后就再也回不到列表，
-                    // 只能关掉窗口重开（这也是用户报"电脑版没法返回列表"的原因）。
-                    if (showSiteList)
-                      _barIcon(
-                        tooltip: '站点列表',
-                        icon: Icons.apps,
-                        // maybePop：根路由时什么都不做，不会崩；正常情况下它
-                        // 上面一定是 HomePage。
-                        onPressed: () => Navigator.of(context).maybePop(),
-                      ),
                     _barIcon(
                       tooltip: '后退',
                       icon: Icons.arrow_back,
@@ -391,6 +379,37 @@ class _BrowserPageState extends State<BrowserPage> {
                         );
                       },
                     ),
+                    // 站点列表（退出当前站点）：位置在下载右侧。
+                    //
+                    // 两处都是 bug 修复，不是审美调整：
+                    //
+                    // 1) **必须用 pop()，绝不能用 maybePop()。** 本页外面套着
+                    //    PopScope(canPop: !_canGoBack)（见本文件 _build 的返回键
+                    //    拦截）。maybePop 会先问路由的 popDisposition，只要网页
+                    //    还有历史（_canGoBack == true），这次 pop 就被判成
+                    //    doNotPop，转而执行 onPopInvokedWithResult 里的
+                    //    _controller.goBack() —— 于是这个键实际等于"后退一页"，
+                    //    用户点完还停在同一个站点里，表现就是"跟返回一样 / 按了
+                    //    没反应"。桌面端 WebView 的历史几乎总是非空，所以桌面端
+                    //    是 100% 退化；手机端只有历史走到底那一下才碰巧能退出，
+                    //    这就是"有时候能用有时失灵"的全部来源。
+                    //    pop() 是硬退栈，不查 popDisposition，语义才是"退出站点"。
+                    //
+                    // 2) **从最左挪到右侧功能组。** 最左那格贴着屏幕边缘，
+                    //    Android 的返回手势（屏幕左缘右滑）和 44dp 的命中区抢
+                    //    事件，手指落点偏一两个像素就变成系统返回；放到右侧后
+                    //    不再被边缘手势覆盖。
+                    if (showSiteList)
+                      _barIcon(
+                        tooltip: '站点列表',
+                        icon: Icons.apps,
+                        onPressed: () {
+                          final NavigatorState nav = Navigator.of(context);
+                          // canPop 兜底：单站点/根路由场景下按钮本来就不显示，
+                          // 这里再挡一次，避免任何异常栈形态下抛 StateError。
+                          if (nav.canPop()) nav.pop();
+                        },
+                      ),
                     _barIcon(
                       tooltip: '刷新',
                       icon: Icons.refresh,
