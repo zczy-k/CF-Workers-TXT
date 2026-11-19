@@ -137,6 +137,38 @@ jobs:
           set -o pipefail
           bash shell/tools/branding.sh "$RUNNER_TEMP/branding" 2>&1 | tee "$RUNNER_TEMP/branding.log"
 
+      # 每次构建都把"这一版到底是什么"钉在日志和 Summary 上。
+      #
+      # 真事：push 触发的运行拿不到任何输入（app_name / preset_sites 全空），
+      # 打出来的必然是"通用壳"——名字 WebShell、一个预置站点都没有；而产物
+      # （webshell-android-apk / webshell-windows-x64）每次都被同名覆盖。
+      # 用户很容易把 push 那次的文件当成自己手动填参数那次的，然后问
+      # "我明明填了名字，怎么还是 WebShell，还多出别人的站点"。
+      # 这两条信息（名字 + 预置站点个数）写死在构建页面上，不用再猜。
+      - name: 宣布本次产物口径
+        shell: bash
+        run: |
+          env_of() { grep -m1 "^$1=" "$RUNNER_TEMP/branding/app-id.env" | cut -d= -f2- || true; }
+          NAME_EFF="$(env_of APP_NAME_EFFECTIVE)"
+          ID_EFF="$(env_of APP_ID_EFFECTIVE)"
+          PRESETS="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));s=d.get("presetSites") or [];s=s or ([d["presetUrl"]] if (d.get("presetUrl") or "").strip() else []);print(len(s))' "$RUNNER_TEMP/branding/preset.json")"
+          {
+            echo "### 本次产物"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 触发方式 | \`${{ github.event_name }}\` |"
+            echo "| App 名字 | \`$NAME_EFF\` |"
+            echo "| 包名 / 组织 | \`$ID_EFF\` |"
+            echo "| 预置站点 | \`$PRESETS\` 个 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "本次构建：名字=$NAME_EFF 包名=$ID_EFF 预置站点=$PRESETS 个（触发=${{ github.event_name }}）"
+          if [ "$PRESETS" = "0" ]; then
+            printf '::warning title=%s::%s\n' \
+              '这次是通用壳，不是白标包' \
+              "预置站点 0 个、名字 \"$NAME_EFF\"。push 触发的构建拿不到任何输入，只有手动 Run workflow 并填了 app_name / preset_sites 才是白标包。下载产物前先对一下这里的名字，别把 push 那次的文件当成自己那次的。"
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: shell-branding
