@@ -23,8 +23,10 @@ class ShellConfig {
     this.closeToTray = true,
     this.lastUpdateCheckMs = 0,
     this.presetSignature = '',
+    List<String>? presetIds,
     Branding? branding,
   })  : sites = sites ?? <SiteProfile>[],
+        presetIds = presetIds ?? <String>[],
         branding = branding ?? Branding.generic;
 
   /// 站点列表（顺序就是 UI 里的顺序）。
@@ -60,6 +62,14 @@ class ShellConfig {
   /// 上一次把预置站点同步进本配置时，那一版预置站点的指纹
   /// （[Branding.presetSignature]）。空串 = 通用壳，或老配置没这个字段。
   String presetSignature;
+
+  /// 上一版预置同步亲手建出来的那些站点的 id。
+  ///
+  /// 这是「该删谁」的唯一依据：下一版预置换了地址，只删这里记过的、且这一版
+  /// 不再预置的站点；用户自己加的站点永远不在这个名单里，动不到。
+  /// 老配置（这个字段还不存在时写下的）里是空的 —— [syncPresetSites] 会先按
+  /// 地址认领一次，把对得上预置地址的站点补记进来，之后的差异才准。
+  final List<String> presetIds;
 
   Branding branding;
 
@@ -143,6 +153,7 @@ class ShellConfig {
         'closeToTray': closeToTray,
         'lastUpdateCheckMs': lastUpdateCheckMs,
         if (presetSignature.isNotEmpty) 'presetSignature': presetSignature,
+        if (presetIds.isNotEmpty) 'presetIds': presetIds,
         'branding': branding.toJson(),
       };
 
@@ -178,6 +189,13 @@ class ShellConfig {
     config.closeToTray = _asBool(map['closeToTray'], true);
     config.lastUpdateCheckMs = _asInt(map['lastUpdateCheckMs'], 0);
     config.presetSignature = _asString(map['presetSignature']) ?? '';
+
+    final Object? rawPresetIds = map['presetIds'];
+    if (rawPresetIds is List) {
+      for (final Object? e in rawPresetIds) {
+        if (e is String && e.trim().isNotEmpty) config.presetIds.add(e.trim());
+      }
+    }
     return config;
   }
 
@@ -204,6 +222,9 @@ class ShellConfig {
       // 循环里一路覆盖下来，"当前站点"会变成最后一个预置站点。
       // 多站点时这会让列表里高亮错人（用户看到的第一个站点却不是当前站点）。
       config.addSite(site, makeActive: false);
+      // 记下来源：下一版预置换了站点时，靠这份名单精确删掉"上一版的预置"，
+      // 而不是靠地址猜（用户改名/改地址后就猜不出来了）。
+      config.presetIds.add(site.id);
     }
     // 当前站点固定为第一个：空列表时保持 null。
     config.activeSiteId = config.sites.isEmpty ? null : config.sites.first.id;
@@ -211,7 +232,7 @@ class ShellConfig {
     return config;
   }
 
-  /// 把这一版白标包预置的站点补进**已有**配置。
+  /// 把这一版白标包预置的站点同步进**已有**配置。
   ///
   /// 为什么必须有这一步：配置文件一旦存在，[ConfigFile.load] 走的是
   /// [ShellConfig.fromJson]，[bootstrap] 再也不会跑 —— 预置站点永远进不来。
@@ -219,35 +240,94 @@ class ShellConfig {
   /// 站点，看到的都是上一版的列表；上一版是通用壳时就是个空列表，看着像
   /// "构建出来的包是空壳"。
   ///
-  /// 只补不删：用户自己加的站点、用户手动删掉的预置站点都不动。
-  /// 判断依据是指纹 —— 指纹没变就一个字节都不改，所以删掉的不会自己长回来。
+  /// 同步规则（按 [presetIds] 精确 diff，不是按地址猜）：
+  /// * 指纹没变 → 一个字节都不改（用户手动删掉的预置站点不会自己长回来）。
+  /// * 指纹变了 → 先删「上一版预置生成、这一版不再预置」的站点，
+  ///   再把这一版缺的补上。
+  /// * 用户自己加的站点从不在 [presetIds] 里，任何情况下都不会被删。
+  ///
+  /// 老配置（写的时候还没有 [presetIds] 这个字段）会先做一次"认领"：
+  /// 地址和这一版预置对得上的站点补记进 [presetIds]，这样从下一版起
+  /// 差异就算得准。
   static ShellConfig syncPresetSites(ShellConfig config, Branding branding) {
     final String signature = branding.presetSignature;
-    if (config.presetSignature == signature) return config;
+    final List<PresetSite> items = branding.effectivePresetSites;
+
+    // 这一版预置的地址集合（规整后）—— 同时也是"哪些站点算预置"的判定依据。
+    final Set<String> wanted = <String>{};
+    for (final PresetSite item in items) {
+      final String? url = normalizeUrl(item.url.trim());
+      if (url != null) wanted.add(url);
+    }
+
+    if (config.presetSignature == signature) {
+      // 同一版：只补做一次认领（老配置 presetIds 为空时才需要），
+      // 别的都不动 —— 用户删掉的东西绝不能因为一次重启就复活。
+      config.adoptPresetIds(wanted);
+      return config;
+    }
     config.presetSignature = signature;
 
+    // 1) 先删：上一版预置建过、这一版不再预置的站点。
+    final Set<String> previous = config.presetIds.toSet();
+    final Set<String> dropped = <String>{};
+    if (previous.isNotEmpty) {
+      config.sites.removeWhere((SiteProfile s) {
+        final String url = normalizeUrl(s.startUrl) ?? s.startUrl;
+        final bool drop = previous.contains(s.id) && !wanted.contains(url);
+        if (drop) dropped.add(s.id);
+        return drop;
+      });
+    }
+
+    // 2) 再补：这一版预置里有、列表里还没有的地址。
     final Set<String> existing = <String>{};
     for (final SiteProfile s in config.sites) {
       existing.add(normalizeUrl(s.startUrl) ?? s.startUrl);
     }
 
-    for (final PresetSite item in branding.effectivePresetSites) {
+    final List<String> nextIds = <String>[];
+    for (final String id in config.presetIds) {
+      if (dropped.contains(id)) continue;
+      if (config.byId(id) != null) nextIds.add(id);
+    }
+    for (final PresetSite item in items) {
       final String? url = normalizeUrl(item.url.trim());
       if (url == null || !existing.add(url)) continue;
       final String name = (item.name ?? '').trim();
-      config.sites.add(SiteProfile(
+      final SiteProfile site = SiteProfile(
         id: newId(),
         name: name.isEmpty ? guessSiteName(url) : name,
         startUrl: url,
         themeColor: branding.themeColor,
         createdAtMs: nowMs(),
-      ));
+      );
+      config.sites.add(site);
+      nextIds.add(site.id);
     }
+    config.presetIds
+      ..clear()
+      ..addAll(nextIds);
 
-    if (config.activeSiteId == null && config.sites.isNotEmpty) {
+    // 当前站点被删掉时自动落到第一个，否则列表页没有"当前"。
+    if (config.sites.isEmpty) {
+      config.activeSiteId = null;
+    } else if (config.byId(config.activeSiteId) == null) {
       config.activeSiteId = config.sites.first.id;
     }
     return config;
+  }
+
+  /// 把地址和这一版预置对得上的已有站点认作"预置生成"，补记进 [presetIds]。
+  ///
+  /// 只处理老配置（[presetIds] 为空）。这一步是为了让下一版预置换站点时
+  /// 能精准删，而不是留下一堆再也删不掉的旧条目。
+  void adoptPresetIds(Set<String> wanted) {
+    if (wanted.isEmpty || presetIds.isNotEmpty) return;
+    for (final SiteProfile s in sites) {
+      final String url = normalizeUrl(s.startUrl) ?? s.startUrl;
+      if (wanted.contains(url)) presetIds.add(s.id);
+    }
   }
 }
 
@@ -268,10 +348,14 @@ class ConfigFile {
       // 所以读完还要和这一版的 branding 对一次指纹。
       final int sitesBefore = config.sites.length;
       final String sigBefore = config.presetSignature;
+      final String idsBefore = config.presetIds.join(',');
       final ShellConfig synced = ShellConfig.syncPresetSites(config, fallback);
       // 同步结果必须立刻落盘：指纹不持久化的话，每次启动都会重新同步一遍，
-      // 用户手动删掉的预置站点下次启动又会长回来。
-      if (synced.sites.length != sitesBefore || synced.presetSignature != sigBefore) {
+      // 用户手动删掉的预置站点下次启动又会长回来。presetIds 的"认领"同理 ——
+      // 只补记一次，之后按 id 精确 diff 才不会误删用户自己的站点。
+      if (synced.sites.length != sitesBefore ||
+          synced.presetSignature != sigBefore ||
+          synced.presetIds.join(',') != idsBefore) {
         try {
           save(synced);
         } catch (_) {

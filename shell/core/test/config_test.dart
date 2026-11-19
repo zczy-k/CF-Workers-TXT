@@ -237,6 +237,81 @@ void main() {
       expect(c.sites, isEmpty);
       expect(c.activeSiteId, isNull);
     });
+
+    // 这是"用户报的 bug"那一幕：上一版留下的站点不跟着下一版消失，
+    // 列表越滚越长（预置 4 个，屏幕上却显示 5 个）。
+    test('升级换了预置地址：旧预置站点被删掉，用户自己的站点保留', () {
+      final ShellConfig c = ShellConfig.syncPresetSites(ShellConfig(), wl);
+      c.addSite(_site('mine', 'https://mine.example.com'));
+      expect(c.sites, hasLength(3));
+
+      // 新版白标把 mail 换成 note（oa 不变）
+      const Branding v2 = Branding(
+        presetSites: <PresetSite>[
+          PresetSite(url: 'oa.example.com', name: 'OA'),
+          PresetSite(url: 'note.example.com', name: '笔记'),
+        ],
+      );
+      ShellConfig.syncPresetSites(c, v2);
+
+      final List<String> urls =
+          c.sites.map((SiteProfile s) => s.startUrl).toList();
+      expect(urls, contains('https://oa.example.com'));
+      expect(urls, contains('https://note.example.com'));
+      // 上一版预置的 mail 必须消失
+      expect(urls, isNot(contains('https://mail.example.com')));
+      // 用户自己加的一个都不能少
+      expect(urls, contains('https://mine.example.com'));
+      expect(c.sites, hasLength(3));
+    });
+
+    test('老配置（没有 presetIds）：先认领，之后换预置才删得掉', () {
+      // 老版本写下的配置：有站点、有指纹、但没有 presetIds
+      final ShellConfig legacy = ShellConfig(
+        sites: <SiteProfile>[
+          _site('old-oa', 'https://oa.example.com', name: 'OA'),
+          _site('mine', 'https://mine.example.com', name: '我的'),
+        ],
+      );
+      legacy.presetSignature = wl.presetSignature;
+      expect(legacy.presetIds, isEmpty);
+
+      // 同一版：只认领，站点数量不变
+      ShellConfig.syncPresetSites(legacy, wl);
+      expect(legacy.presetIds, <String>['old-oa']);
+
+      // 下一版不要 oa 了：认领过的 old-oa 被删，mine 留着
+      const Branding v2 = Branding(
+        presetSites: <PresetSite>[
+          PresetSite(url: 'mail.example.com', name: '邮箱'),
+        ],
+      );
+      ShellConfig.syncPresetSites(legacy, v2);
+      final List<String> ids =
+          legacy.sites.map((SiteProfile s) => s.id).toList();
+      expect(ids, isNot(contains('old-oa')));
+      expect(ids, contains('mine'));
+    });
+
+    test('当前站点被预置变更删掉后自动落到第一个', () {
+      final ShellConfig c = ShellConfig.syncPresetSites(ShellConfig(), wl);
+      c.activeSiteId = c.sites.first.id; // 指向 oa
+      const Branding v2 = Branding(
+        presetSites: <PresetSite>[
+          PresetSite(url: 'mail.example.com', name: '邮箱'),
+        ],
+      );
+      ShellConfig.syncPresetSites(c, v2);
+      expect(c.sites, hasLength(1));
+      expect(c.activeSiteId, c.sites.first.id);
+    });
+
+    test('presetIds 能往返 JSON', () {
+      final ShellConfig c = ShellConfig.syncPresetSites(ShellConfig(), wl);
+      final ShellConfig back = ShellConfig.fromJson(c.toJson());
+      expect(back.presetIds, c.presetIds);
+      expect(back.presetSignature, c.presetSignature);
+    });
   });
 
   group('站点增删改查', () {
