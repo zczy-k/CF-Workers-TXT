@@ -32,7 +32,7 @@ on:
         required: false
         default: ''
       preset_sites:
-        description: '多个预置站点（JSON 数组）：[{"url":"https://a.com","name":"OA"},{"url":"https://b.com","name":"邮箱"}]。填了它优先于 preset_url；一个站点直达，两个及以上进列表'
+        description: '多个预置站点（JSON 数组）：[{"url":"https://a.com","name":"OA"},{"url":"https://b.com","name":"邮箱"}]。填了它优先于 preset_url；一个站点直达，两个及以上进列表。★公开仓库建议改在 Settings→Secrets 配 WL_PRESET_SITES（值同格式），这一框留空。'
         required: false
         default: ''
       theme_color:
@@ -109,9 +109,12 @@ jobs:
     env:
       APP_NAME: ${{ github.event.inputs.app_name }}
       APP_ID: ${{ github.event.inputs.app_id }}
-      PRESET_URL: ${{ github.event.inputs.preset_url }}
+      PRESET_URL: ${{ secrets.WL_PRESET_URL || github.event.inputs.preset_url }}
       PRESET_NAME: ${{ github.event.inputs.preset_name }}
-      PRESET_SITES: ${{ github.event.inputs.preset_sites }}
+      # 站点地址是私有信息，公开仓库里别往 inputs 里写。
+      # 在 Settings → Secrets 里配 WL_PRESET_SITES（值就是那段 JSON 数组），
+      # 这里有 secret 就优先用它；没配才退回手动输入。
+      PRESET_SITES: ${{ secrets.WL_PRESET_SITES || github.event.inputs.preset_sites }}
       THEME_COLOR: ${{ github.event.inputs.theme_color }}
       LOGO_URL: ${{ github.event.inputs.logo_url }}
       LOGO_PATH: ${{ github.event.inputs.logo_path }}
@@ -174,7 +177,9 @@ jobs:
           name: shell-branding
           path: ${{ runner.temp }}/branding
           if-no-files-found: error
-          retention-days: 7
+          # 只留 1 天：它是两个平台 job 的中间产物，包里带着 preset.json（里面
+          # 是预置站点地址）。公开仓库的 artifact 只要登录就能下，没必要多留。
+          retention-days: 1
 
       - name: 失败原因（免登录可读）
         if: failure()

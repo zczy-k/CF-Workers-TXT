@@ -377,11 +377,15 @@ say "产物："
 # 脚本会在最后一步无谓地退出码非 0。
 ls -R "$OUT_DIR" | head -40 || true
 say "preset.json:"
-cat "$OUT_DIR/preset.json"
+# 只报"写进去几条"，**不打地址**。
+# 仓库是公开的：job 日志登录就能看，下面的 annotation 连登录都不用 ——
+# 以前把 preset.json 原文整个打出来，等于把我的站点清单挂到公网上。
+# 要核对内容就看本地生成的 preset.json，或者看构建时填的参数。
+SITE_COUNT="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));s=d.get("presetSites") or [];s=s or ([d["presetUrl"]] if (d.get("presetUrl") or "").strip() else []);print(len(s))' "$OUT_DIR/preset.json")"
+say "  appName=${APP_NAME} appId=${APP_ID_EFFECTIVE} presetSites=${SITE_COUNT} 个（地址不输出）"
 
-# 再把最终内容压成一行塞进 annotation：仓库是公开的，但 job 日志要登录才能看，
-# 而 annotations 匿名可读。出现"装上去一个站点都没有"这类问题时，
-# 这里是唯一能看到这一次到底往 preset.json 里写了什么的入口。
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
-  printf '::notice title=preset.json::%s\n' "$(tr -d '\r\n' < "$OUT_DIR/preset.json")"
+  printf '::notice title=%s::%s\n' \
+    'preset.json' \
+    "appName=${APP_NAME} appId=${APP_ID_EFFECTIVE} presetSites=${SITE_COUNT} 个；预置地址按公开仓库策略不输出。"
 fi
