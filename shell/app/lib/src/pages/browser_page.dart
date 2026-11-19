@@ -312,8 +312,23 @@ class _BrowserPageState extends State<BrowserPage> {
     // 按钮按下去只会是死键。用户的要求也是"单网站不要显示"。
     final bool showSiteList = !widget.state.branding.singleSiteMode;
 
-    // 手机拇指热区惯例：导航键贴左侧、功能键贴右侧，中间留空。
+    // 底栏布局（2026-11-19 改版）：
+    //
+    //        [后退] [首页] [前进]              [站点列表] [更多]
+    //                ↑ 屏幕正中
+    //
+    // ① 导航组整组居中、首页正压在屏幕中线上，前后对称 —— 拇指从左右任一侧
+    //    伸过来位移一样，不用先"找"按钮在哪。
+    // ② 功能组贴右。Align 不带 widthFactor 时铺满 Stack，与居中的导航组天然
+    //    分层；320dp 窄屏上导航组 3×44=132 占 94~226，功能组 2×44=88 占
+    //    232~320，中间还剩 6dp，不会撞。
+    // ③ 底栏从 7 个键砍到 5 个：下载列表挪进「更多」菜单（那里本来就有一份
+    //    刷新，底栏的刷新键同理删掉，同一功能不留两个入口）。
     // 触摸端 56dp、桌面 48dp：鼠标是精确指针，48 已经够点；手指需要更多余量。
+    // 键间距只在桌面端加（窗口宽，留白好看）；触摸端 44dp 命中区里图标本身
+    // 就有内边距，再加间距会把窄屏挤爆，反而更挤。
+    final double navGap = _isTouch ? 0 : 8;
+
     return SafeArea(
       top: false,
       child: BottomAppBar(
@@ -324,105 +339,71 @@ class _BrowserPageState extends State<BrowserPage> {
           // 而不是顶着上沿留一条空档。Positioned 的进度线不受影响。
           alignment: Alignment.center,
           children: <Widget>[
+            // 导航组：后退 / 首页 / 前进，整组居中。
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    _barIcon(
-                      tooltip: '后退',
-                      icon: Icons.arrow_back,
-                      onPressed: _canGoBack ? () => _controller?.goBack() : null,
-                    ),
-                    _barIcon(
-                      tooltip: '回到首页',
-                      icon: Icons.home_outlined,
-                      onPressed: () {
-                        final SiteProfile? site = _site;
-                        if (site != null) {
-                          _controller?.loadUrl(
-                            urlRequest: URLRequest(url: WebUri(site.startUrl)),
-                          );
-                        }
-                      },
-                    ),
-                    _barIcon(
-                      tooltip: '前进',
-                      icon: Icons.arrow_forward,
-                      onPressed: _canForward ? () => _controller?.goForward() : null,
-                    ),
-                  ],
+                _barIcon(
+                  tooltip: '后退',
+                  icon: Icons.arrow_back,
+                  onPressed: _canGoBack ? () => _controller?.goBack() : null,
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    // 浏览页是 push 出来的独立路由，App 级的 ListenableBuilder
-                    // 不会重建它 —— 必须自己监听 state，否则下载一开始角标亮不起来。
-                    ListenableBuilder(
-                      listenable: widget.state,
-                      builder: (BuildContext ctx, Widget? _) {
-                        final int active = widget.state.activeDownloadCount;
-                        return _barIcon(
-                          tooltip: '下载',
-                          onPressed: () => Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                              builder: (BuildContext _) =>
-                                  DownloadsPage(state: widget.state),
-                            ),
-                          ),
-                          iconWidget: Badge(
-                            isLabelVisible: active > 0,
-                            label: Text('$active'),
-                            child: const Icon(Icons.download_outlined),
-                          ),
-                        );
-                      },
-                    ),
-                    // 站点列表（退出当前站点）：位置在下载右侧。
-                    //
-                    // 两处都是 bug 修复，不是审美调整：
-                    //
-                    // 1) **必须用 pop()，绝不能用 maybePop()。** 本页外面套着
-                    //    PopScope(canPop: !_canGoBack)（见本文件 _build 的返回键
-                    //    拦截）。maybePop 会先问路由的 popDisposition，只要网页
-                    //    还有历史（_canGoBack == true），这次 pop 就被判成
-                    //    doNotPop，转而执行 onPopInvokedWithResult 里的
-                    //    _controller.goBack() —— 于是这个键实际等于"后退一页"，
-                    //    用户点完还停在同一个站点里，表现就是"跟返回一样 / 按了
-                    //    没反应"。桌面端 WebView 的历史几乎总是非空，所以桌面端
-                    //    是 100% 退化；手机端只有历史走到底那一下才碰巧能退出，
-                    //    这就是"有时候能用有时失灵"的全部来源。
-                    //    pop() 是硬退栈，不查 popDisposition，语义才是"退出站点"。
-                    //
-                    // 2) **从最左挪到右侧功能组。** 最左那格贴着屏幕边缘，
-                    //    Android 的返回手势（屏幕左缘右滑）和 44dp 的命中区抢
-                    //    事件，手指落点偏一两个像素就变成系统返回；放到右侧后
-                    //    不再被边缘手势覆盖。
-                    if (showSiteList)
-                      _barIcon(
-                        tooltip: '站点列表',
-                        icon: Icons.apps,
-                        onPressed: () {
-                          final NavigatorState nav = Navigator.of(context);
-                          // canPop 兜底：单站点/根路由场景下按钮本来就不显示，
-                          // 这里再挡一次，避免任何异常栈形态下抛 StateError。
-                          if (nav.canPop()) nav.pop();
-                        },
-                      ),
-                    _barIcon(
-                      tooltip: '刷新',
-                      icon: Icons.refresh,
-                      onPressed: () => _controller?.reload(),
-                    ),
-                    _barIcon(
-                      tooltip: '更多',
-                      icon: Icons.more_vert,
-                      onPressed: () => _showPageMenu(context),
-                    ),
-                  ],
+                if (navGap > 0) SizedBox(width: navGap),
+                _barIcon(
+                  tooltip: '回到首页',
+                  icon: Icons.home_outlined,
+                  onPressed: () {
+                    final SiteProfile? site = _site;
+                    if (site != null) {
+                      _controller?.loadUrl(
+                        urlRequest: URLRequest(url: WebUri(site.startUrl)),
+                      );
+                    }
+                  },
+                ),
+                if (navGap > 0) SizedBox(width: navGap),
+                _barIcon(
+                  tooltip: '前进',
+                  icon: Icons.arrow_forward,
+                  onPressed: _canForward ? () => _controller?.goForward() : null,
                 ),
               ],
+            ),
+            // 功能组贴右：站点列表 / 更多。
+            Align(
+              alignment: Alignment.centerRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  // 站点列表（退出当前站点）。
+                  //
+                  // **必须用 pop()，绝不能用 maybePop()。** 本页外面套着
+                  // PopScope(canPop: !_canGoBack)（见本文件 _build 的返回键
+                  // 拦截）。maybePop 会先问路由的 popDisposition，只要网页还有
+                  // 历史（_canGoBack == true）这次 pop 就被判成 doNotPop，转而
+                  // 执行 onPopInvokedWithResult 里的 _controller.goBack() ——
+                  // 于是这个键实际等于"后退一页"，用户点完还停在同一个站点里。
+                  // 桌面端 WebView 历史几乎总是非空 → 100% 退化；手机端只有历史
+                  // 退到底那一下才碰巧能退出，这就是"时灵时不灵"的全部来源。
+                  // pop() 是硬退栈，不查 popDisposition，语义才是"退出站点"。
+                  if (showSiteList)
+                    _barIcon(
+                      tooltip: '站点列表',
+                      icon: Icons.apps,
+                      onPressed: () {
+                        final NavigatorState nav = Navigator.of(context);
+                        // canPop 兜底：单站点/根路由场景下按钮本来就不显示，
+                        // 这里再挡一次，避免任何异常栈形态下抛 StateError。
+                        if (nav.canPop()) nav.pop();
+                      },
+                    ),
+                  _barIcon(
+                    tooltip: '更多',
+                    icon: Icons.more_vert,
+                    onPressed: () => _showPageMenu(context),
+                  ),
+                ],
+              ),
             ),
             // 加载进度：压在底栏自己的上沿，横贯全宽。
             // 放在底栏内部是因为它不占任何额外高度（Bar 的高度是定死的），
@@ -448,9 +429,11 @@ class _BrowserPageState extends State<BrowserPage> {
   /// 底栏上的一个图标按钮。
   ///
   /// 命中区从 IconButton 默认的 48dp 收到 44（触摸端）/ 40（桌面），不是随手
-  /// 缩的：多站点模式底栏有 7 个按钮，7×48 = 336 —— 360dp 的窄屏刚好卡死，
-  /// 320dp（iPhone SE 一类老机型）直接 RenderFlex overflow 报红条。
-  /// 44 仍在 Material 触摸尺寸下限附近，手指点得中；7×44 = 308 留出余量。
+  /// 缩的：底栏最挤的时候（多站点模式）有 7 个按钮，7×48 = 336 —— 360dp 的
+  /// 窄屏刚好卡死，320dp（iPhone SE 一类老机型）直接 RenderFlex overflow 报
+  /// 红条。44 仍在 Material 触摸尺寸下限附近，手指点得中；7×44 = 308 留出余量。
+  /// 现在底栏只剩 5 个键（下载、刷新都收进「更多」菜单），这套尺寸没动 ——
+  /// 44/40 的命中区手感是验证过的，换布局不跟着改手感。
   Widget _barIcon({
     required String tooltip,
     required VoidCallback? onPressed,
@@ -1055,6 +1038,9 @@ class _BrowserPageState extends State<BrowserPage> {
     if (site == null) return;
     final String current = _url.isEmpty ? site.startUrl : _url;
     final ColorScheme colors = Theme.of(context).colorScheme;
+    // 打开菜单这一刻的下载数。菜单是 showModalBottomSheet 的一次性构建，
+    // 不会跟着 state 重建 —— 这里只要个快照，够表达"有没有活儿在跑"。
+    final int activeDownloads = widget.state.activeDownloadCount;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -1094,6 +1080,28 @@ class _BrowserPageState extends State<BrowserPage> {
               ),
             ),
             const Divider(height: 1),
+            // 下载列表：从底栏挪进来的。底栏图标条上它的信息量最低（正常
+            // 浏览时那个位置只显示一个"有没有下载"），却要占一整个 44dp 命中
+            // 区，还跟刷新、站点列表挤在一起。挪到这里以后：底栏腾出位置给
+            // 居中的导航组，下载入口的语义反而更清楚（"文件相关的事都在菜单里"）。
+            ListTile(
+              leading: Badge(
+                isLabelVisible: activeDownloads > 0,
+                label: Text('$activeDownloads'),
+                child: const Icon(Icons.download_outlined),
+              ),
+              title: Text(
+                activeDownloads > 0 ? '下载列表（$activeDownloads 个进行中）' : '下载列表',
+              ),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (BuildContext _) => DownloadsPage(state: widget.state),
+                  ),
+                );
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.refresh),
               title: const Text('刷新'),
