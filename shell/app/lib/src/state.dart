@@ -12,6 +12,13 @@ import 'package:webshell_core/webshell_core.dart';
 import 'icons.dart';
 import 'paths.dart';
 
+/// `assets/preset.json` 读取或解析失败的原因（null = 正常）。
+///
+/// 只在站点列表为空时用得上：白标包装上去一个站点都没有，用户除了"空白页"
+/// 看不到任何线索，只能猜是不是构建坏了。把这个原因直接写在空状态页上，
+/// 至少能一眼看出是"预置配置没读进来"而不是"App 没打包站点"。
+String? presetLoadError;
+
 /// 一个正在接收的 `blob:` 下载（前端生成的文件走这条通道）。
 class _BlobSession {
   _BlobSession({required this.task, required this.sink});

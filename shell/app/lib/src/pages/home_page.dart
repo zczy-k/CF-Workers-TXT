@@ -120,6 +120,34 @@ class _EmptySites extends StatelessWidget {
                   ),
             ),
             const SizedBox(height: 28),
+            if (presetLoadError != null) ...<Widget>[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colors.errorContainer.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '预置配置（preset.json）读取失败',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: colors.onErrorContainer,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    // 可选中：用户能直接把这段贴出来，不用手抄
+                    SelectableText(
+                      presetLoadError!,
+                      style: TextStyle(fontSize: 12, color: colors.onErrorContainer),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
             if (branding.allowAddSite)
               FilledButton.icon(
                 onPressed: onAdd,

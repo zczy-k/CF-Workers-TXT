@@ -384,7 +384,6 @@ class Branding {
 
   /// 白标版是否仍允许用户自己加站点（默认允许）。
   final bool allowAddSite;
-
   /// 是否显示地址栏（想更"像原生 App"可以关）。
   final bool showAddressBar;
 
@@ -404,6 +403,24 @@ class Branding {
   /// 预置多个时必须进列表，否则用户没有入口切换到第二个站点。
   bool get singleSiteMode =>
       isWhiteLabel && !allowAddSite && effectivePresetSites.length == 1;
+
+  /// 本次构建预置站点的指纹（地址 + 名字都算进去，顺序也算）。
+  ///
+  /// 用途只有一个：判断配置文件里的站点列表是不是**上一版**留下的。
+  /// 配置文件一旦存在，[ShellConfig.bootstrap] 就不会再跑，预置站点永远进不来 ——
+  /// 用户装了新一版白标包，看到的还是上一版的列表；要是上一版是通用壳，
+  /// 那就是一个空列表，看着像"构建出来的包是空壳"。
+  /// 指纹变了才同步，没变就一个字节都不动（用户手动删掉的预置站点不会自己长回来）。
+  String get presetSignature {
+    final List<PresetSite> items = effectivePresetSites;
+    if (items.isEmpty) return '';
+    final List<String> parts = <String>[];
+    for (final PresetSite s in items) {
+      final String url = normalizeUrl(s.url.trim()) ?? s.url.trim();
+      parts.add('$url|${(s.name ?? '').trim()}');
+    }
+    return parts.join('\n');
+  }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'appName': appName,

@@ -91,6 +91,17 @@ void main() {
       expect(b.effectivePresetSites.single.name, 'OA');
       expect(b.isWhiteLabel, isTrue);
     });
+
+    test('presetSignature：地址与名字都算进去，通用壳为空', () {
+      expect(Branding.generic.presetSignature, isEmpty);
+      const Branding a = Branding(presetUrl: 'oa.example.com', presetName: 'OA');
+      // 地址规整后相同 → 指纹相同（`https://oa.example.com/` 与 `oa.example.com` 是一回事）
+      const Branding b = Branding(presetUrl: 'https://oa.example.com/', presetName: 'OA');
+      expect(a.presetSignature, b.presetSignature);
+      // 名字不同 → 指纹不同（改名也要能同步下去）
+      const Branding c = Branding(presetUrl: 'oa.example.com', presetName: '办公');
+      expect(a.presetSignature, isNot(c.presetSignature));
+    });
   });
 
   group('bootstrap', () {
@@ -156,6 +167,75 @@ void main() {
       expect(c.sites, hasLength(2));
       expect(c.sites.first.name, '第一个');
       expect(c.sites.last.name, 'mail.example.com');
+    });
+  });
+
+  group('预置站点同步（换包 / 升级）', () {
+    // 场景：用户先装了通用壳（配置文件里站点是空的），再装白标包。
+    // 配置文件存在 → bootstrap 不再跑 → 预置站点必须靠 syncPresetSites 补进来。
+    const Branding wl = Branding(
+      appName: '公司壳',
+      presetSites: <PresetSite>[
+        PresetSite(url: 'oa.example.com', name: 'OA'),
+        PresetSite(url: 'mail.example.com', name: '邮箱'),
+      ],
+    );
+
+    test('空配置 + 白标包 → 两个预置站点都补进列表', () {
+      final ShellConfig c = ShellConfig.syncPresetSites(ShellConfig(), wl);
+      expect(c.sites, hasLength(2));
+      expect(c.sites.map((SiteProfile s) => s.name).toList(), <String>['OA', '邮箱']);
+      expect(c.sites.first.startUrl, 'https://oa.example.com');
+      // 列表是空的，得有个当前站点，否则列表页没有"当前"
+      expect(c.activeSiteId, c.sites.first.id);
+      expect(c.presetSignature, wl.presetSignature);
+    });
+
+    test('指纹没变时重复同步不会加重复条目', () {
+      final ShellConfig c = ShellConfig.syncPresetSites(ShellConfig(), wl);
+      final int before = c.sites.length;
+      ShellConfig.syncPresetSites(c, wl);
+      expect(c.sites, hasLength(before));
+    });
+
+    test('用户自己加的站点保留，预置站点只补缺的', () {
+      final ShellConfig c = ShellConfig();
+      c.addSite(_site('mine', 'https://mine.example.com'));
+      ShellConfig.syncPresetSites(c, wl);
+      expect(c.sites, hasLength(3));
+      expect(c.sites.first.id, 'mine');
+      // 已有的当前站点不被抢走
+      expect(c.activeSiteId, 'mine');
+    });
+
+    test('白标包升级：新增的站点补进来，已有的不重复', () {
+      final ShellConfig c = ShellConfig.syncPresetSites(ShellConfig(), wl);
+      const Branding v2 = Branding(
+        presetSites: <PresetSite>[
+          PresetSite(url: 'oa.example.com', name: 'OA'),
+          PresetSite(url: 'mail.example.com', name: '邮箱'),
+          PresetSite(url: 'note.example.com', name: '笔记'),
+        ],
+      );
+      ShellConfig.syncPresetSites(c, v2);
+      expect(c.sites, hasLength(3));
+      expect(c.sites.last.name, '笔记');
+    });
+
+    test('用户删掉的预置站点，指纹没变就不会自己长回来', () {
+      final ShellConfig c = ShellConfig.syncPresetSites(ShellConfig(), wl);
+      c.removeSite(c.sites.first.id);
+      expect(c.sites, hasLength(1));
+      // 再同步一次（同一版白标包）：指纹相同 → 什么都不动
+      ShellConfig.syncPresetSites(c, wl);
+      expect(c.sites, hasLength(1));
+    });
+
+    test('通用壳不会因为同步而凭空多出站点', () {
+      final ShellConfig c = ShellConfig();
+      ShellConfig.syncPresetSites(c, Branding.generic);
+      expect(c.sites, isEmpty);
+      expect(c.activeSiteId, isNull);
     });
   });
 
@@ -349,6 +429,42 @@ void main() {
       final ShellConfig c = file.load(const Branding(presetUrl: 'https://fallback.com'));
       expect(c.sites.single.startUrl, 'https://fallback.com');
       expect(File('${file.file.path}.corrupt').existsSync(), isTrue);
+    });
+
+    test('配置文件已存在时，白标包的新预置站点照样进得来', () {
+      // 先按通用壳存一份（站点为空）—— 这就是"装过通用壳"的状态
+      file.save(ShellConfig());
+      // 再装白标包启动
+      final ShellConfig c = file.load(const Branding(
+        presetSites: <PresetSite>[
+          PresetSite(url: 'oa.example.com', name: 'OA'),
+          PresetSite(url: 'mail.example.com', name: '邮箱'),
+        ],
+      ));
+      expect(c.sites, hasLength(2));
+      expect(c.sites.first.name, 'OA');
+    });
+
+    test('同步结果会落盘：重启后不会重复补站点，删掉的也不会长回来', () {
+      file.save(ShellConfig());
+      const Branding wl = Branding(
+        presetSites: <PresetSite>[
+          PresetSite(url: 'oa.example.com', name: 'OA'),
+          PresetSite(url: 'mail.example.com', name: '邮箱'),
+        ],
+      );
+      final ShellConfig first = file.load(wl);
+      expect(first.sites, hasLength(2));
+
+      // 模拟重启：重新读盘，站点不该变成 4 个
+      final ShellConfig second = file.load(wl);
+      expect(second.sites, hasLength(2));
+
+      // 用户删掉一个，再重启 —— 指纹已经落盘，不会又补回来
+      second.removeSite(second.sites.first.id);
+      file.save(second);
+      final ShellConfig third = file.load(wl);
+      expect(third.sites, hasLength(1));
     });
 
     test('目录不存在也能存', () {

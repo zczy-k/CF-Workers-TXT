@@ -22,6 +22,7 @@ class ShellConfig {
     this.saveLogin = true,
     this.closeToTray = true,
     this.lastUpdateCheckMs = 0,
+    this.presetSignature = '',
     Branding? branding,
   })  : sites = sites ?? <SiteProfile>[],
         branding = branding ?? Branding.generic;
@@ -55,6 +56,10 @@ class ShellConfig {
 
   /// 上次自动检查更新的时间（ms）。自动检查按 24h 节流，手动检查不受限。
   int lastUpdateCheckMs;
+
+  /// 上一次把预置站点同步进本配置时，那一版预置站点的指纹
+  /// （[Branding.presetSignature]）。空串 = 通用壳，或老配置没这个字段。
+  String presetSignature;
 
   Branding branding;
 
@@ -137,6 +142,7 @@ class ShellConfig {
         'saveLogin': saveLogin,
         'closeToTray': closeToTray,
         'lastUpdateCheckMs': lastUpdateCheckMs,
+        if (presetSignature.isNotEmpty) 'presetSignature': presetSignature,
         'branding': branding.toJson(),
       };
 
@@ -171,6 +177,7 @@ class ShellConfig {
     config.saveLogin = _asBool(map['saveLogin'], true);
     config.closeToTray = _asBool(map['closeToTray'], true);
     config.lastUpdateCheckMs = _asInt(map['lastUpdateCheckMs'], 0);
+    config.presetSignature = _asString(map['presetSignature']) ?? '';
     return config;
   }
 
@@ -200,6 +207,46 @@ class ShellConfig {
     }
     // 当前站点固定为第一个：空列表时保持 null。
     config.activeSiteId = config.sites.isEmpty ? null : config.sites.first.id;
+    config.presetSignature = branding.presetSignature;
+    return config;
+  }
+
+  /// 把这一版白标包预置的站点补进**已有**配置。
+  ///
+  /// 为什么必须有这一步：配置文件一旦存在，[ConfigFile.load] 走的是
+  /// [ShellConfig.fromJson]，[bootstrap] 再也不会跑 —— 预置站点永远进不来。
+  /// 用户先装通用壳、再装白标包（同包名，配置文件保留），或者白标包升级换了
+  /// 站点，看到的都是上一版的列表；上一版是通用壳时就是个空列表，看着像
+  /// "构建出来的包是空壳"。
+  ///
+  /// 只补不删：用户自己加的站点、用户手动删掉的预置站点都不动。
+  /// 判断依据是指纹 —— 指纹没变就一个字节都不改，所以删掉的不会自己长回来。
+  static ShellConfig syncPresetSites(ShellConfig config, Branding branding) {
+    final String signature = branding.presetSignature;
+    if (config.presetSignature == signature) return config;
+    config.presetSignature = signature;
+
+    final Set<String> existing = <String>{};
+    for (final SiteProfile s in config.sites) {
+      existing.add(normalizeUrl(s.startUrl) ?? s.startUrl);
+    }
+
+    for (final PresetSite item in branding.effectivePresetSites) {
+      final String? url = normalizeUrl(item.url.trim());
+      if (url == null || !existing.add(url)) continue;
+      final String name = (item.name ?? '').trim();
+      config.sites.add(SiteProfile(
+        id: newId(),
+        name: name.isEmpty ? guessSiteName(url) : name,
+        startUrl: url,
+        themeColor: branding.themeColor,
+        createdAtMs: nowMs(),
+      ));
+    }
+
+    if (config.activeSiteId == null && config.sites.isNotEmpty) {
+      config.activeSiteId = config.sites.first.id;
+    }
     return config;
   }
 }
@@ -216,7 +263,22 @@ class ConfigFile {
     if (!file.existsSync()) return ShellConfig.bootstrap(fallback);
     try {
       final Object? raw = jsonDecode(file.readAsStringSync());
-      return ShellConfig.fromJson(raw);
+      final ShellConfig config = ShellConfig.fromJson(raw);
+      // 配置文件存在 = 这不是首次启动，但预置站点可能换了（换包 / 白标升级），
+      // 所以读完还要和这一版的 branding 对一次指纹。
+      final int sitesBefore = config.sites.length;
+      final String sigBefore = config.presetSignature;
+      final ShellConfig synced = ShellConfig.syncPresetSites(config, fallback);
+      // 同步结果必须立刻落盘：指纹不持久化的话，每次启动都会重新同步一遍，
+      // 用户手动删掉的预置站点下次启动又会长回来。
+      if (synced.sites.length != sitesBefore || synced.presetSignature != sigBefore) {
+        try {
+          save(synced);
+        } catch (_) {
+          // 目录只读之类：本次启动照常用同步后的配置，下次再试
+        }
+      }
+      return synced;
     } catch (_) {
       // 配置坏了不能让 App 起不来：留证据，然后从默认配置开始。
       try {

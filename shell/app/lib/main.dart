@@ -60,11 +60,24 @@ Future<void> main() async {
 /// 白标配置来自 `assets/preset.json`（CI 按 workflow 输入重写它再打包）。
 ///
 /// 读不到就用通用壳默认值：一个坏文件不该让 App 起不来。
+/// 但失败原因记进 [presetLoadError]，空状态页会显示 —— 否则用户只能对着
+/// 一个空白列表猜"是不是构建出错了"。
 Future<Branding> loadBranding() async {
   try {
     final String text = await rootBundle.loadString('assets/preset.json');
-    return Branding.fromJson(jsonDecode(text));
-  } catch (_) {
+    final Object? raw = jsonDecode(text);
+    final Branding branding = Branding.fromJson(raw);
+    // 写了预置站点却一项都没解析出来 —— 这不是"通用壳"，是配置写错了。
+    // 不吭声的话用户看到的就是一个空列表，跟"根本没打包站点"分不清。
+    final Object? rawSites = raw is Map ? raw['presetSites'] : null;
+    if (rawSites is List && rawSites.isNotEmpty && branding.effectivePresetSites.isEmpty) {
+      presetLoadError =
+          'preset.json 的 presetSites 一项都没解析出来（每项都需要非空的 url）：'
+          '${jsonEncode(rawSites)}';
+    }
+    return branding;
+  } catch (e) {
+    presetLoadError = e.toString();
     return Branding.generic;
   }
 }

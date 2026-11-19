@@ -296,11 +296,44 @@ if [ "$ALLOW_ADD_SITE" = "true" ]; then ADD_SITE_JSON="true"; else ADD_SITE_JSON
 
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
-# 多站点：workflow 传入的是 JSON 数组字符串，原样透传（Dart 侧 fromJson 会过滤
-# 掉格式不对的项）。不能在这里 json_escape —— 整个数组是一段结构化 JSON，
-# 转义掉引号就变成字符串了。留空则写 []，Dart 侧回退到单数的 presetUrl。
+# 多站点：workflow 传入的是 JSON 数组字符串。这里**校验并规范化**再写进
+# preset.json —— 不能原样透传：用户手填的 JSON 很容易带上中文引号、尾逗号、
+# 单引号，坏 JSON 会让 Dart 侧 jsonDecode 抛异常、静默退回通用壳，
+# 表现就是"构建成功，但装上去一个站点都没有"，排查起来极费劲。
+# 在 CI 里直接失败，比出一个空壳好。
+#
+# 不能在这里 json_escape —— 整个数组是一段结构化 JSON，转义掉引号就变成字符串了。
 if [ -n "$PRESET_SITES" ]; then
-  PRESET_SITES_JSON="$PRESET_SITES"
+  if ! PRESET_SITES_JSON="$(printf '%s' "$PRESET_SITES" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    arr = json.loads(raw)
+except Exception as e:
+    sys.stderr.write("preset_sites 不是合法 JSON：%s\n" % e)
+    sys.exit(1)
+if not isinstance(arr, list) or not arr:
+    sys.stderr.write("preset_sites 必须是非空的 JSON 数组\n")
+    sys.exit(1)
+out = []
+for i, it in enumerate(arr, 1):
+    if not isinstance(it, dict):
+        sys.stderr.write("preset_sites 第 %d 项不是对象\n" % i)
+        sys.exit(1)
+    url = it.get("url")
+    if not isinstance(url, str) or not url.strip():
+        sys.stderr.write("preset_sites 第 %d 项缺少 url\n" % i)
+        sys.exit(1)
+    name = it.get("name")
+    item = {"url": url.strip()}
+    if isinstance(name, str) and name.strip():
+        item["name"] = name.strip()
+    out.append(item)
+print(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
+')"; then
+    say "preset_sites 解析失败，构建中止（不会打出一个没有站点的空壳）"
+    exit 1
+  fi
 else
   PRESET_SITES_JSON="[]"
 fi
@@ -345,3 +378,10 @@ say "产物："
 ls -R "$OUT_DIR" | head -40 || true
 say "preset.json:"
 cat "$OUT_DIR/preset.json"
+
+# 再把最终内容压成一行塞进 annotation：仓库是公开的，但 job 日志要登录才能看，
+# 而 annotations 匿名可读。出现"装上去一个站点都没有"这类问题时，
+# 这里是唯一能看到这一次到底往 preset.json 里写了什么的入口。
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  printf '::notice title=preset.json::%s\n' "$(tr -d '\r\n' < "$OUT_DIR/preset.json")"
+fi
