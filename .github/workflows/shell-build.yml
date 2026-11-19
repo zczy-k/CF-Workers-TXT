@@ -24,11 +24,15 @@ on:
         required: false
         default: ''
       preset_url:
-        description: '预置站点地址（白标版入口，例如 oa.corp.com）。留空 = 通用壳'
+        description: '预置站点地址（单个，白标版入口，例如 oa.corp.com）。留空 = 通用壳。多个站点请用下面的 preset_sites'
         required: false
         default: ''
       preset_name:
-        description: '预置站点在列表里显示的名字。留空 = 用域名'
+        description: '预置站点在列表里显示的名字（配合 preset_url）。留空 = 用域名'
+        required: false
+        default: ''
+      preset_sites:
+        description: '多个预置站点（JSON 数组）：[{"url":"https://a.com","name":"OA"},{"url":"https://b.com","name":"邮箱"}]。填了它优先于 preset_url；一个站点直达，两个及以上进列表'
         required: false
         default: ''
       theme_color:
@@ -107,6 +111,7 @@ jobs:
       APP_ID: ${{ github.event.inputs.app_id }}
       PRESET_URL: ${{ github.event.inputs.preset_url }}
       PRESET_NAME: ${{ github.event.inputs.preset_name }}
+      PRESET_SITES: ${{ github.event.inputs.preset_sites }}
       THEME_COLOR: ${{ github.event.inputs.theme_color }}
       LOGO_URL: ${{ github.event.inputs.logo_url }}
       LOGO_PATH: ${{ github.event.inputs.logo_path }}

@@ -28,6 +28,7 @@ APP_NAME="${APP_NAME:-WebShell}"
 APP_ID="${APP_ID:-dev.webshell.webshell}"
 PRESET_URL="${PRESET_URL:-}"
 PRESET_NAME="${PRESET_NAME:-}"
+PRESET_SITES="${PRESET_SITES:-}"
 THEME_COLOR="${THEME_COLOR:-#2962FF}"
 LOGO_URL="${LOGO_URL:-}"
 LOGO_PATH="${LOGO_PATH:-}"
@@ -143,6 +144,19 @@ else
       say "图标 URL 下载失败，继续往下找"
     fi
   fi
+fi
+
+# 多站点没填单数 PRESET_URL 时，从 preset_sites 里取第一个 url 当图标来源。
+# python3 在 ubuntu-latest 自带；解析失败就当没有，走首字母图标，不让构建挂掉。
+if [ -z "$PRESET_URL" ] && [ -n "$PRESET_SITES" ]; then
+  PRESET_URL="$(printf '%s' "$PRESET_SITES" | python3 -c '
+import json, sys
+try:
+    arr = json.load(sys.stdin)
+    print((arr[0].get("url") or "") if isinstance(arr, list) and arr and isinstance(arr[0], dict) else "")
+except Exception:
+    print("")
+' 2>/dev/null || true)"
 fi
 
 if [ -z "$SRC" ] && [ "$AUTO_ICON" = "true" ] && [ -n "$PRESET_URL" ]; then
@@ -282,6 +296,15 @@ if [ "$ALLOW_ADD_SITE" = "true" ]; then ADD_SITE_JSON="true"; else ADD_SITE_JSON
 
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
+# 多站点：workflow 传入的是 JSON 数组字符串，原样透传（Dart 侧 fromJson 会过滤
+# 掉格式不对的项）。不能在这里 json_escape —— 整个数组是一段结构化 JSON，
+# 转义掉引号就变成字符串了。留空则写 []，Dart 侧回退到单数的 presetUrl。
+if [ -n "$PRESET_SITES" ]; then
+  PRESET_SITES_JSON="$PRESET_SITES"
+else
+  PRESET_SITES_JSON="[]"
+fi
+
 # 版本号单一真相源：shell/app/pubspec.yaml 的 `version: 0.1.0+1`。
 # 构建号（+1）留给平台构建用，preset.json 只带用户可见的 0.1.0。
 # 读不到时退回 0.0.0 —— 版本显示宁缺毋滥，也别让构建挂在这。
@@ -298,6 +321,7 @@ cat > "$OUT_DIR/preset.json" <<JSON
   "themeColor": $COLOR_INT,
   "presetUrl": "$(json_escape "$PRESET_URL")",
   "presetName": "$(json_escape "$PRESET_NAME")",
+  "presetSites": $PRESET_SITES_JSON,
   "allowAddSite": $ADD_SITE_JSON,
   "showAddressBar": true,
   "appVersion": "$APP_VERSION",

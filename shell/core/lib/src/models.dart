@@ -318,6 +318,26 @@ DateTime? _tryParseHttpDate(String value) {
   return DateTime.utc(year, month, day, hour, minute, second);
 }
 
+/// 构建期预置的单个站点。多站点白标版用它替代单数的 presetUrl/presetName。
+class PresetSite {
+  const PresetSite({required this.url, this.name});
+
+  final String url;
+  final String? name;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'url': url,
+        if (name != null && name!.isNotEmpty) 'name': name,
+      };
+
+  static PresetSite? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final Object? u = raw['url'];
+    if (u is! String || u.trim().isEmpty) return null;
+    return PresetSite(url: u.trim(), name: _asString(raw['name']));
+  }
+}
+
 /// 品牌/白标信息。
 ///
 /// 构建期由 CI 写进 `assets/preset.json`（仓库里也有一份"通用壳"默认值），
@@ -329,6 +349,7 @@ class Branding {
     this.themeColor = SiteProfile.defaultThemeColor,
     this.presetUrl,
     this.presetName,
+    this.presetSites = const <PresetSite>[],
     this.allowAddSite = true,
     this.showAddressBar = true,
     this.updateUrl,
@@ -345,8 +366,21 @@ class Branding {
   final int themeColor;
 
   /// 预置站点入口 —— 白标版的核心。
+  /// 单数两个字段是旧格式（单站点白标），保留兼容；多站点走 [presetSites]。
   final String? presetUrl;
   final String? presetName;
+  final List<PresetSite> presetSites;
+
+  /// 本次构建实际要装进列表的站点：新格式优先，旧格式兜底。
+  /// 一个都没有时返回空列表（通用壳）。
+  List<PresetSite> get effectivePresetSites {
+    if (presetSites.isNotEmpty) return presetSites;
+    final String? url = presetUrl;
+    if (url == null || url.trim().isEmpty) return const <PresetSite>[];
+    return <PresetSite>[
+      PresetSite(url: url, name: (presetName ?? '').trim().isEmpty ? null : presetName),
+    ];
+  }
 
   /// 白标版是否仍允许用户自己加站点（默认允许）。
   final bool allowAddSite;
@@ -364,11 +398,12 @@ class Branding {
 
   static const Branding generic = Branding();
 
-  bool get isWhiteLabel => (presetUrl ?? '').trim().isNotEmpty;
+  bool get isWhiteLabel => effectivePresetSites.isNotEmpty;
 
-  /// 白标 + 禁止加站 = 单站点直达模式：启动直接进站点内容页，不显示站点列表。
-  /// 只要还允许加站（或根本不是白标），就维持列表首屏，方便用户管理自己的站点。
-  bool get singleSiteMode => isWhiteLabel && !allowAddSite;
+  /// 单站点直达：预置恰好一个站点且禁止加站。
+  /// 预置多个时必须进列表，否则用户没有入口切换到第二个站点。
+  bool get singleSiteMode =>
+      isWhiteLabel && !allowAddSite && effectivePresetSites.length == 1;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'appName': appName,
@@ -376,6 +411,8 @@ class Branding {
         'themeColor': themeColor,
         if (presetUrl != null && presetUrl!.isNotEmpty) 'presetUrl': presetUrl,
         if (presetName != null && presetName!.isNotEmpty) 'presetName': presetName,
+        if (presetSites.isNotEmpty)
+          'presetSites': presetSites.map((PresetSite s) => s.toJson()).toList(),
         'allowAddSite': allowAddSite,
         'showAddressBar': showAddressBar,
         if (updateUrl != null && updateUrl!.isNotEmpty) 'updateUrl': updateUrl,
@@ -391,6 +428,12 @@ class Branding {
       themeColor: _asInt(raw['themeColor'], SiteProfile.defaultThemeColor),
       presetUrl: rawUrl is String ? normalizeUrl(rawUrl) : null,
       presetName: _asString(raw['presetName']),
+      presetSites: (raw['presetSites'] is List)
+          ? (raw['presetSites'] as List)
+              .map(PresetSite.fromJson)
+              .whereType<PresetSite>()
+              .toList(growable: false)
+          : const <PresetSite>[],
       allowAddSite: _asBool(raw['allowAddSite'], true),
       showAddressBar: _asBool(raw['showAddressBar'], true),
       updateUrl: _asString(raw['updateUrl']),

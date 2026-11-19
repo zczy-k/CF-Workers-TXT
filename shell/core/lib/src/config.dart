@@ -175,23 +175,26 @@ class ShellConfig {
   }
 
   /// 首次启动 / 白标版启动：把预置站点建出来。
+  /// 支持多个：填一个直达，填两个及以上进列表（singleSiteMode 在 Branding 里判）。
   static ShellConfig bootstrap(Branding branding) {
     final ShellConfig config = ShellConfig(branding: branding);
-    final String preset = (branding.presetUrl ?? '').trim();
-    if (preset.isEmpty) return config;
+    final Set<String> seen = <String>{};
+    for (final PresetSite item in branding.effectivePresetSites) {
+      final String? url = normalizeUrl(item.url.trim());
+      // 无效地址 / 重复地址都跳过：一个写错不能拖垮其余站点，
+      // 同一站点写两遍也不该在列表里出现两次。
+      if (url == null || !seen.add(url)) continue;
 
-    final String? url = normalizeUrl(preset);
-    if (url == null) return config;
-
-    final String name = (branding.presetName ?? '').trim();
-    final SiteProfile site = SiteProfile(
-      id: newId(),
-      name: name.isEmpty ? guessSiteName(url) : name,
-      startUrl: url,
-      themeColor: branding.themeColor,
-      createdAtMs: nowMs(),
-    );
-    config.addSite(site);
+      final String name = (item.name ?? '').trim();
+      final SiteProfile site = SiteProfile(
+        id: newId(),
+        name: name.isEmpty ? guessSiteName(url) : name,
+        startUrl: url,
+        themeColor: branding.themeColor,
+        createdAtMs: nowMs(),
+      );
+      config.addSite(site);
+    }
     return config;
   }
 }
