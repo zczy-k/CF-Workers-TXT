@@ -375,15 +375,63 @@ jobs:
             grep -nE 'compileSdk|targetSdk|minSdk|proguard|minifyEnabled|shrinkResources|ndkVersion' android/app/build.gradle* 2>/dev/null | head -20 || true
           } 2>&1 | tee "$RUNNER_TEMP/android-toolchain.log"
 
-      # Gradle 编译 `.gradle.kts` 时会创建一个内部虚拟项目 `:gradle`，它的
-      # buildscript **默认只问 plugins.gradle.org 一个源**。那个镜像一旦缺某个
-      # 版本，构建会在"配插件"这一步就死，连 compileReleaseKotlin 都到不了。
-      # 真事（2026-11-19）：Gradle 9.5.0 内置的 gradle-kotlin-dsl-plugins 6.5.7
-      # 依赖 org.jetbrains.kotlin:kotlin-stdlib:2.3.20，而 plugins.gradle.org 上
-      # 那个版本的 POM 拉不到 → 报 "Could not find kotlin-stdlib:2.3.20"。
-      # 该版本在 Maven Central 上是有的，所以这里给所有 buildscript 与 project
-      # 补上 Maven Central / Google / 阿里云镜像，别让它只吊在一根绳上。
-      - name: 给 Gradle 补多仓库兜底（init script）
+      # 插件的解析仓库不是项目级的。Flutter 把 `dev.flutter.flutter-plugin-loader`
+      # 放在 included build（$FLUTTER_ROOT/packages/flutter_tools/gradle）里，
+      # 那个 build 的 settings **没有声明 pluginManagement.repositories**，于是
+      # 插件解析只问 plugins.gradle.org 一个源。Gradle 9.5.0 内置的
+      # gradle-kotlin-dsl-plugins 6.5.7 要 org.jetbrains.kotlin:kotlin-stdlib:2.3.20，
+      # 该版本在 Maven Central 有、在 plugins.gradle.org 上没有 → 报
+      # "Could not find kotlin-stdlib:2.3.20"，构建在"配插件"阶段就死。
+      # 这里直接给那个 included build 的 settings 插一段 pluginManagement 仓库，
+      # 从源头上让它能问到 Maven Central。
+      #
+      # 注意别用 init script 的 `beforeSettings { pluginManagement ... }`，也别往
+      # project 上加 `repositories{}`：那个 build 的 settings 写着
+      # `repositoriesMode = FAIL_ON_PROJECT_REPOS`，一注入就报
+      # "Build was configured to prefer settings repositories over project
+      #  repositories but repository 'Google' was added ..."。改文件最干净。
+      - name: 给 Flutter 自带 included build 补插件仓库
+        run: |
+          set -o pipefail
+          FR="${FLUTTER_ROOT:-}"
+          if [ -z "$FR" ]; then
+            FR="$(cd "$(dirname "$(command -v flutter)")/.." && pwd)"
+          fi
+          SETTINGS="$FR/packages/flutter_tools/gradle/settings.gradle.kts"
+          if [ ! -f "$SETTINGS" ]; then
+            echo "::warning title=补丁跳过::$SETTINGS 不存在（Flutter SDK 结构变了？）"
+            exit 0
+          fi
+          python3 - "$SETTINGS" <<'PY'
+          import io
+          import sys
+
+          path = sys.argv[1]
+          src = io.open(path, encoding='utf-8').read()
+          if 'pluginManagement' in src:
+              print('已有 pluginManagement，跳过')
+              raise SystemExit(0)
+          head = '''pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url = uri("https://maven.aliyun.com/repository/public") }
+                  maven { url = uri("https://maven.aliyun.com/repository/google") }
+                  maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+                  gradlePluginPortal()
+              }
+          }
+
+          '''
+          io.open(path, 'w', encoding='utf-8').write(head + src)
+          PY
+          echo "=== 打补丁后的 included build settings（前 14 行）==="
+          head -14 "$SETTINGS"
+
+      # 第二道兜底：buildscript 仓库不受 repositoriesMode 管控，给所有 project
+      # （含 included build 的 project）的 buildscript 补 Maven Central / Google /
+      # 阿里云镜像。这里**只碰 buildscript**，绝不碰 p.repositories。
+      - name: 给 Gradle buildscript 补多仓库兜底（init script）
         run: |
           mkdir -p "$HOME/.gradle/init.d"
           cat > "$HOME/.gradle/init.d/00-mirrors.gradle" <<'GRADLE'
@@ -393,30 +441,12 @@ jobs:
               'https://maven.aliyun.com/repository/gradle-plugin',
           ]
 
-          beforeSettings { settings ->
-              settings.pluginManagement.repositories {
-                  google()
-                  mavenCentral()
-                  mirrors.each { u -> maven { url = u } }
-                  gradlePluginPortal()
-              }
-              settings.dependencyResolutionManagement.repositories {
-                  google()
-                  mavenCentral()
-                  mirrors.each { u -> maven { url = u } }
-              }
-          }
-
           allprojects { p ->
               p.buildscript.repositories {
                   google()
                   mavenCentral()
                   mirrors.each { u -> maven { url = u } }
-              }
-              p.repositories {
-                  google()
-                  mavenCentral()
-                  mirrors.each { u -> maven { url = u } }
+                  gradlePluginPortal()
               }
           }
           GRADLE
