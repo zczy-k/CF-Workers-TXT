@@ -193,8 +193,13 @@ class ShellConfig {
         themeColor: branding.themeColor,
         createdAtMs: nowMs(),
       );
-      config.addSite(site);
+      // 必须 makeActive: false —— addSite 默认会把新站点设为当前，
+      // 循环里一路覆盖下来，"当前站点"会变成最后一个预置站点。
+      // 多站点时这会让列表里高亮错人（用户看到的第一个站点却不是当前站点）。
+      config.addSite(site, makeActive: false);
     }
+    // 当前站点固定为第一个：空列表时保持 null。
+    config.activeSiteId = config.sites.isEmpty ? null : config.sites.first.id;
     return config;
   }
 }
