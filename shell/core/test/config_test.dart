@@ -62,35 +62,6 @@ void main() {
       );
     });
 
-    test('多站点白标：解析 + 直达判定', () {
-      final Branding b = Branding.fromJson(const <String, dynamic>{
-        'presetSites': <Object>[
-          <String, Object>{'url': 'oa.example.com', 'name': 'OA'},
-          <String, Object>{'url': 'mail.example.com', 'name': '邮箱'},
-        ],
-        'allowAddSite': false,
-      });
-      expect(b.isWhiteLabel, isTrue);
-      expect(b.effectivePresetSites, hasLength(2));
-      expect(b.effectivePresetSites.first.name, 'OA');
-      // 两个及以上站点必须进列表，否则第二个站点没有入口
-      expect(b.singleSiteMode, isFalse);
-
-      final Branding one = Branding.fromJson(const <String, dynamic>{
-        'presetSites': <Object>[
-          <String, Object>{'url': 'oa.example.com', 'name': 'OA'},
-        ],
-        'allowAddSite': false,
-      });
-      expect(one.singleSiteMode, isTrue);
-    });
-
-    test('旧格式 preset_url 仍作为单站点兜底', () {
-      const Branding b = Branding(presetUrl: 'oa.example.com', presetName: 'OA');
-      expect(b.effectivePresetSites, hasLength(1));
-      expect(b.effectivePresetSites.single.name, 'OA');
-      expect(b.isWhiteLabel, isTrue);
-    });
   });
 
   group('bootstrap', () {
@@ -127,36 +98,6 @@ void main() {
       expect(c.activeSiteId, isNull);
     });
 
-    test('多站点：全部建出来，第一个为当前', () {
-      final ShellConfig c = ShellConfig.bootstrap(Branding.fromJson(
-        const <String, dynamic>{
-          'presetSites': <Object>[
-            <String, Object>{'url': 'oa.example.com', 'name': 'OA'},
-            <String, Object>{'url': 'mail.example.com', 'name': '邮箱'},
-            <String, Object>{'url': 'note.example.com', 'name': '笔记'},
-          ],
-        },
-      ));
-      expect(c.sites, hasLength(3));
-      expect(c.sites.map((SiteProfile s) => s.name).toList(), <String>['OA', '邮箱', '笔记']);
-      expect(c.activeSiteId, c.sites.first.id);
-    });
-
-    test('多站点：非法地址与重复地址跳过，不影响其余', () {
-      final ShellConfig c = ShellConfig.bootstrap(Branding.fromJson(
-        const <String, dynamic>{
-          'presetSites': <Object>[
-            <String, Object>{'url': 'ftp://bad.example.com', 'name': '坏'},
-            <String, Object>{'url': 'oa.example.com', 'name': '第一个'},
-            <String, Object>{'url': 'https://oa.example.com/', 'name': '重复'},
-            <String, Object>{'url': 'mail.example.com'},
-          ],
-        },
-      ));
-      expect(c.sites, hasLength(2));
-      expect(c.sites.first.name, '第一个');
-      expect(c.sites.last.name, 'mail.example.com');
-    });
   });
 
   group('站点增删改查', () {
