@@ -174,10 +174,15 @@ Windows 上跑还需要 **WebView2 运行时**（Win10/11 通常随 Edge 自带�
 | `flutter_inappwebview ^6.1.5` | 两端引擎（Android WebView / Windows WebView2） | 6.x 是目前唯一在两端都暴露"下载事件 / 文件选择 / 新窗口 / Cookie / 注入脚本"的插件——这几项正是"残废壳"缺的东西 |
 | `path_provider` | 应用私有目录、Android 外部目录 | 官方维护，Android/Windows 都有实现 |
 | `url_launcher` | `tel:` / `mailto:` / 交给系统浏览器 | 同上 |
-| `file_picker ^13.1.0` | Windows 选目录 | 版本必须 ≥12（Windows 实现要 `win32 ^6`），且与 `flutter_secure_storage ^11` 同升，否则 win32 冲突 |
+| `file_picker ^13.1.0` | Windows 选目录 | 版本必须 ≥12（Windows 实现要 `win32 ^6`），且与其它带 `win32` 的插件同升，否则冲突 |
 | `flutter_file_dialog ^3.3.3` | Android "另存为"（系统 SAF 选择器） | 不需要存储权限就能写用户选的目录 |
 | `open_filex ^5.0.0` | Android 打开下载好的文件 | 只支持 Android/iOS；Windows 端用 `explorer.exe` 自己实现 |
-| `flutter_secure_storage ^11.2.0` | Basic Auth 密码 | 走 Keystore / DPAPI，密码不落明文文件 |
+| `ffi ^2.1.0` | 调 Win32：窗口守卫 + **DPAPI 加密密码** | 不用额外插件就能拿到 `CryptProtectData`，密钥由系统托管（见 `local_secure_store.dart`） |
+
+> **Basic Auth 密码怎么存的**：Windows 上 `secrets.bin` 整份内容走 DPAPI（`CryptProtectData`
+> + 本程序专属 entropy），换机器 / 换用户就解不开；Android / iOS 上是掩码混淆，真正的
+> 防线落在 App 私有目录 + 构建期关掉 `android:allowBackup`。逐项对照见
+> `ARCHITECTURE.md` §6.1。
 
 ---
 

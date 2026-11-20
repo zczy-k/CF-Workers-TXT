@@ -4,7 +4,7 @@ publish_to: none
 version: 0.1.0+1
 
 environment:
-  # 依赖下限来自这几个插件：flutter_file_dialog 要 3.44+，flutter_secure_storage 11 要 Dart 3.8+。
+  # 依赖下限来自这几个插件：flutter_file_dialog 要 3.44+，url_launcher_android 要 Dart 3.8+。
   sdk: '>=3.12.0 <4.0.0'
   flutter: '>=3.44.0'
 
@@ -32,7 +32,8 @@ dependencies:
   open_filex: ^5.0.0
 
   # Win32 FFI：桌面端清理 WebView2 残留顶层窗（见
-  # lib/src/desktop/webview_window_guard.dart），直接调 user32/kernel32。
+  # lib/src/desktop/webview_window_guard.dart），以及调 DPAPI 给 secrets.bin 做
+  # 真加密（见 lib/src/local_secure_store.dart），直接调 user32/kernel32/crypt32。
   ffi: ^2.1.0
   # Basic Auth 的密码：走本地 secrets.bin（随数据目录一起迁移，见 lib/src/local_secure_store.dart），
   # 不再依赖 flutter_secure_storage（它在 Windows 上固定写 %APPDATA%，迁移会漏）

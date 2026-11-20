@@ -187,11 +187,31 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 | 方式 | 适用 | 实现 |
 | --- | --- | --- |
 | **页面登录（默认）** | 99% 的站点 | 用户第一次在网页里正常登录，Cookie 存进 App 自己的 profile，之后保持登录。**不做任何自动填充**，避免触发风控 |
-| **Basic Auth（401）** | 服务端弹原生认证框 | 用户名/密码存系统安全存储（Android Keystore / Windows DPAPI），收到 401 时自动应答（`HttpAuthResponse`）；Windows 端引擎没有这个回调，见 §7 |
-| **自定义请求头** | 没有登录页的 API 型站点 | 每站点可配 `Authorization: Bearer xxx` 等固定头：顶层导航由原生带，页面内部 `fetch`/XHR 由注入脚本补（`Cookie` 这类禁改头会被跳过） |
+| **Basic Auth（401）** | 服务端弹原生认证框 | 用户名/密码存 `<数据目录>/secrets.bin`，Windows 上该文件由 **DPAPI** 加密（见 §6.1）；收到 401 时自动应答（`HttpAuthResponse`）；Windows 端引擎没有这个回调，见 §7 |
+| **自定义请求头** | 没有登录页的 API 型站点 | 每站点可配 `Authorization: Bearer xxx` 等固定头：顶层导航由原生带，页面内部 `fetch`/XHR 由注入脚本补（`Cookie` 这类禁改头会被跳过）。**注意：这里的 token 是明文存在 `webshell.json` 里的**，见 §6.1 |
 
 配置文件里**只有"有没有密码"这个标记**（`hasBasicAuth`），密码本体永远不进 `json`，
-只进 `flutter_secure_storage`。
+只进 `secrets.bin`。
+
+### 6.1 磁盘上到底存了什么，各自怎么保护
+
+用户最常问的一句话就是"我登录的密码是不是明文躺在文件夹里"。逐项交代（别含糊）：
+
+| 落点 | 内容 | 保护的强度 |
+| --- | --- | --- |
+| `secrets.bin`（Windows） | Basic Auth 密码 | **真加密**：`CryptProtectData`（DPAPI）+ 本程序专属 entropy。密钥是当前 Windows 用户的主密钥，由系统托管、程序拿不到也导不出；文件拷到别的机器 / 别的用户下**解不开**（表现为密码失效、需重输一次） |
+| `secrets.bin`（Android / iOS） | Basic Auth 密码 | **混淆**：固定掩码异或。这不是加密，挡不住拿到文件的人。这些平台真正的防线是 **App 私有目录**（`/data/data/<包名>/`，别的 App 和文件管理器都进不去）+ 构建期把 `android:allowBackup` 关掉（`adb backup` 也拖不走） |
+| WebView profile（Windows） | Cookie / localStorage / IndexedDB / 缓存 | 引擎自己落盘，Chromium 用 DPAPI 保护 Cookie 值；但它**不防同一个 Windows 用户**——同账号下的程序能解 |
+| WebView profile（Android） | 同上 | 落在 App 私有目录，靠系统沙箱隔离；密钥在 Android Keystore |
+| `webshell.json` | 站点列表、设置、**自定义请求头** | **明文 JSON**（可读可改，这是刻意的：用户要能手工编辑 / 备份）。所以**不要把长期有效的高权限 token 填进请求头**，那会明文躺在磁盘上 |
+| `downloads.json` / `icons/` | 下载记录、图标 | 明文，非机密 |
+
+老版本（`secrets.bin` 纯掩码、没有文件头）用户升级后**不需要重输密码**：读到老格式会
+当场按新格式（`WSSEC` + 版本 + 方案字节）重写成密文，这条有单测兜着
+（`test/secret_store_test.dart` 断言磁盘上搜不到明文）。
+
+"保持登录"关掉时，走的是另一条路：浏览页用 `incognito` 打开（Cookie / localStorage 不落盘），
+并清掉已落地的 Cookie + 全部 Web Storage + 缓存（`state.dart` 的 `_wipeAllLoginState`）。
 
 ### 关于 profile 隔离：本版是"共享 profile + 按域名清 Cookie"
 
@@ -302,7 +322,7 @@ document-start 注入，只做四件事，且都对失败宽容（单页脚本�
 → `.../check-runs/<id>/annotations` 免登录就能读到，排错不用登录（本仓库前几轮的失败都是这样定位的）。
 
 Android `minSdk` 用 Flutter 模板默认的 **24**，正好等于本套插件里要求最高的那个
-（`flutter_secure_storage 11` / `flutter_file_dialog` / `url_launcher_android`），所以不必改。
+（`flutter_file_dialog` / `url_launcher_android`），所以不必改。
 
 ---
 

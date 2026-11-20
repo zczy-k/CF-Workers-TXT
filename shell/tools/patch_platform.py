@@ -60,6 +60,22 @@ def patch_manifest(path: str, label: str) -> None:
             1,
         )
 
+    # 关掉备份：App 私有目录里放着 secrets.bin（Basic Auth 密码）和 WebView 的
+    # Cookie / localStorage，那些就是"登录态"。模板默认 allowBackup="true"，
+    # 意味着 `adb backup`（或个别厂商的云备份）能把它们整个拖走 —— 这比本机
+    # 加密的问题大得多，属于"绕过 App 直接把登录态拷出去"。
+    # 关掉之后：换机迁移靠 App 内的站点列表重加 / 重新登录，而不是把凭据打包搬走。
+    # Android 12+ 的云备份与设备间传输同样受这个开关约束。
+    if "android:allowBackup" in s:
+        s = re.sub(r'android:allowBackup="[^"]*"', 'android:allowBackup="false"', s)
+    else:
+        s = s.replace(
+            "<application",
+            '<application\n        android:allowBackup="false"\n'
+            '        android:fullBackupContent="false"',
+            1,
+        )
+
     # 顺序要紧：& 必须先换，否则后面产生的 &quot; 会被二次转义成 &amp;quot;
     safe_label = label.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
     s, count = re.subn(r'android:label="[^"]*"', 'android:label="%s"' % safe_label, s, count=1)
