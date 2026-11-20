@@ -1,0 +1,10 @@
+{
+  "name": "cf-workers-txt",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "本地开发用（不是部署用的 npm 项目）：node mock.mjs 起一个内存版 R2/KV 服务器驱动 worker.js",
+  "scripts": {
+    "dev": "node mock.mjs"
+  }
+}

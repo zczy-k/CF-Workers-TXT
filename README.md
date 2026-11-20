@@ -33,6 +33,7 @@ client/（原生客户端）
   - [1. 先开 R2](#1-先开-r2)
   - [2. Workers 版](#2-workers-版有域名就用这个)
   - [3. Pages 版](#3-pages-版没有域名就用这个)
+- [本机调试](#本机调试可选)
 - [环境变量](#环境变量)
 - [功能](#功能)
 - [数据存在哪](#数据存在哪)
@@ -90,10 +91,33 @@ R2 每月免费额度：**10GB 存储 / 100 万次写 / 1000 万次读，出口�
 1. 同上先开 R2 + 建桶（要分享再加 KV）
 2. **Workers & Pages → Pages** 新建项目 → 选「直接上传 / Upload assets」
 3. 上传 [`pages.zip`](./pages.zip) → 保存并部署
+
+   > zip 里只有一个 `_worker.js`，它必须和仓库里的 [`worker.js`](./worker.js) **逐字节一致**。
+   > 自己改过 worker.js 之后记得重新打包（Windows：把 `worker.js` 复制成 `_worker.js`，右键压缩成 zip）：
+   >
+   > ```bash
+   > python -c "import zipfile; zipfile.ZipFile('pages.zip','w',zipfile.ZIP_DEFLATED).write('worker.js','_worker.js')"
+   > ```
 4. **设置 → 绑定** 加 `R2`（必填）与 `KV`（可选），变量名必须一字不差
 5. **设置 → 变量** 加 `ADMIN_UUID`
 6. **重新上传 `pages.zip` 并再部署一次**（让绑定生效，这一步最容易漏）
 7. 打开 `https://<pages域名>/<ADMIN_UUID>`
+
+---
+
+## 本机调试（可选）
+
+不用每改一行就部署到 Cloudflare 再试。仓库里带了一个内存版 R2 / KV，能把**真实的 `worker.js`** 直接跑起来：
+
+```bash
+node mock.mjs                                    # → http://127.0.0.1:8787/dev
+PORT=9000 ADMIN_UUID=me PASSWORD=pw node mock.mjs
+```
+
+数据全在内存里，Ctrl+C 就清空 —— 碰不到你线上任何一个字节。`ADMIN_UUID` 默认是 `dev`。
+
+> 它只做请求 / 响应的翻译，不模拟 Cloudflare 的边缘行为：没有缓存、没有 **10ms CPU** 上限、
+> 没有真实客户端 IP。所以限速、超时、大文件相关的分支，本地表现和线上不一样，别拿本地当性能结论。
 
 ---
 
@@ -279,8 +303,9 @@ KV 里存的（前缀互不干扰）：
 
 ```
 worker.js                 Cloudflare Worker 主体（单文件，直接粘贴进控制台）
-pages.zip                 Pages 版产物（上传 assets 用）
-mock.mjs                  本地跑 worker.js 用的 R2 / KV 内存实现（node mock.mjs）
+pages.zip                 Pages 版产物（上传 assets 用，内容必须 = 当前 worker.js）
+mock.mjs                  内存版 R2 / KV：`node mock.mjs` 起本地服务器，或被测试 import
+package.json              只为让 node 把 worker.js 当 ESM（type: module），不是部署用的 npm 项目
 client/                   Flutter 原生客户端（自己画像素，不吃 WebView）
   core/                   纯 Dart：API 封装 / URL 规则 / 同步引擎（dart test）
   app/                    界面

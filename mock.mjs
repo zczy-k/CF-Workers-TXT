@@ -1,5 +1,13 @@
 // 内存版 R2 / KV mock —— 驱动真实 worker.js
+//
+// 两种用法：
+//   1) 被测试 import：`import { MockR2, MockKV, makeExec } from './mock.mjs'`（纯库，无副作用）
+//   2) 直接跑：`node mock.mjs` —— 起一个本地 HTTP 服务，浏览器里就是完整的笔记应用，
+//      数据全在内存里，Ctrl+C 即清空。默认 http://127.0.0.1:8787/<ADMIN_UUID=dev>
+//      环境变量可覆盖：PORT / ADMIN_UUID / PASSWORD / FILENAME
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import { pathToFileURL } from 'node:url';
 
 function bodyToU8(val) {
   if (val == null) return new Uint8Array(0);
@@ -157,3 +165,65 @@ export function makeExec() {
   const waits = [];
   return { waitUntil: p => waits.push(p), waits };
 }
+
+// ===== 本地开发服务器 =====
+// 把 node:http 的请求翻成标准 Request 丢给 worker.fetch，再把 Response 翻回去。
+// 只为了让 worker.js 能在本机跑起来调试 —— 不模拟 Cloudflare 的边缘行为
+// （没有缓存、没有 CPU 时限、没有真实 IP，限速相关的分支要按本地 IP 走）。
+
+async function serve() {
+  const PORT = Number(process.env.PORT || 8787);
+  const { default: worker } = await import('./worker.js');
+
+  const env = {
+    R2: new MockR2(),
+    KV: new MockKV(),
+    ADMIN_UUID: process.env.ADMIN_UUID || 'dev',
+    PASSWORD: process.env.PASSWORD || '',
+    FILENAME: process.env.FILENAME || 'CF-Workers-TXT（本地）',
+  };
+
+  const server = createServer(async (req, res) => {
+    try {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+
+      const request = new Request(`http://127.0.0.1:${PORT}${req.url}`, {
+        method: req.method,
+        headers: req.headers,
+        body: hasBody ? Buffer.concat(chunks) : undefined,
+        redirect: 'manual',
+      });
+
+      const ctx = makeExec();
+      const response = await worker.fetch(request, env, ctx);
+      const buf = Buffer.from(await response.arrayBuffer());
+
+      const headers = {};
+      for (const [k, v] of response.headers) {
+        // 这两个交给 node 自己算，照抄会和实际 body 对不上
+        if (k === 'transfer-encoding' || k === 'content-length') continue;
+        headers[k] = v;
+      }
+      const cookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
+      if (cookies.length) headers['set-cookie'] = cookies;
+
+      res.writeHead(response.status, headers);
+      res.end(buf);
+      await Promise.all(ctx.waits);
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'text/plain;charset=utf-8' });
+      res.end('mock 服务器出错：\n' + (e && e.stack ? e.stack : String(e)));
+    }
+  });
+
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log(`本地： http://127.0.0.1:${PORT}/${env.ADMIN_UUID}`);
+    if (env.PASSWORD) console.log('已启用密码登录（PASSWORD 环境变量）');
+    console.log('数据全在内存里，Ctrl+C 结束即清空。');
+  });
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) await serve();
