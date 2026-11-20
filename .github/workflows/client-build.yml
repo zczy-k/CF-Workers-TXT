@@ -109,6 +109,66 @@ jobs:
           print(p.read_text(encoding='utf-8'))
           PY
 
+      # Flutter 自带的 included build（packages/flutter_tools/gradle）里写死了
+      #   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+      #   repositories { google(); mavenCentral() }
+      # —— 只有这两个仓库。runner 上 Maven Central 一旦限流/超时，:gradle 的
+      # compileClasspath 就是整片 "Could not find kotlin-stdlib / javawriter / asm"，
+      # 看着像版本不存在，实际是下载不到（本地 curl 那几个 POM 全是 200）。
+      # 因为 FAIL_ON_PROJECT_REPOS，init script 给 p.repositories 补仓库会被判违规，
+      # 只能在源头上把镜像塞进去。
+      - name: 给 Flutter 自带的 Gradle 构建补镜像仓库
+        run: |
+          set -o pipefail
+          FR="${FLUTTER_ROOT:-}"
+          if [ -z "$FR" ]; then
+            FR="$(cd "$(dirname "$(command -v flutter)")/.." && pwd)"
+          fi
+          SETTINGS="$FR/packages/flutter_tools/gradle/settings.gradle.kts"
+          if [ ! -f "$SETTINGS" ]; then
+            echo "::warning title=补丁跳过::$SETTINGS 不存在（Flutter SDK 结构变了？）"
+            exit 0
+          fi
+          python3 - "$SETTINGS" <<'PY'
+          import io
+          import sys
+
+          path = sys.argv[1]
+          src = io.open(path, encoding='utf-8').read()
+
+          MIRRORS = ''.join(
+              '        maven { url = uri("%s") }\n' % u for u in (
+                  'https://maven.aliyun.com/repository/public',
+                  'https://maven.aliyun.com/repository/google',
+                  'https://maven.aliyun.com/repository/gradle-plugin',
+              )
+          )
+
+          changed = []
+
+          if 'maven.aliyun.com' not in src:
+              marker = '        mavenCentral()\n'
+              if marker in src:
+                  src = src.replace(marker, marker + MIRRORS, 1)
+                  changed.append('依赖仓库镜像')
+              else:
+                  print('::warning title=镜像没加上::没找到 mavenCentral() 行，Flutter SDK 结构变了？')
+          else:
+              print('已有阿里云镜像，跳过')
+
+          if 'pluginManagement' not in src:
+              head = 'pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n' \
+                     + MIRRORS + '        gradlePluginPortal()\n    }\n}\n\n'
+              src = head + src
+              changed.append('pluginManagement')
+          else:
+              print('已有 pluginManagement，跳过')
+
+          io.open(path, 'w', encoding='utf-8').write(src)
+          print('已改：', '、'.join(changed) if changed else '无')
+          PY
+          head -20 "$SETTINGS"
+
       - name: pub get
         working-directory: client/app
         run: flutter pub get
