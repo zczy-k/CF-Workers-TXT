@@ -325,3 +325,19 @@ client/                   Flutter 原生客户端（自己画像素，不吃 Web
 
 有问题先翻 [`client/ARCHITECTURE.md`](./client/ARCHITECTURE.md) 里对应章节 —— 大部分「为什么这么设计」都写了原因，不是拍脑袋。
 用得顺手就给个 Star。
+
+---
+
+## 许可证
+
+[**Apache License 2.0**](./LICENSE)。
+
+商用、修改、再发布、内部私有化都可以，代价只有三条：保留版权与许可声明、改过的文件注明改过、
+别拿作者名义背书。**它不要求你开源自己的修改** —— 这是选它而不是 GPL 的原因：`worker.js` 是要被
+人拿去部署到自己域名下的，用 copyleft 会把一堆自建用户挡在门外。
+
+分发时请连同 [`NOTICE`](./NOTICE) 一起保留，那里写了第三方组件的归属（Flutter 等）。
+
+> 另一个仓库（[CF-WebShell](https://github.com/zczy-k/CF-WebShell)）用的是 GPL-3.0。
+> 两者**并不冲突**：GPL-3.0 与 Apache-2.0 是兼容的（FSF 认可；真正不兼容的是 GPLv2），
+> 而且这两个项目本来就零依赖 —— 一个是服务端 JS，一个是 Flutter 壳。

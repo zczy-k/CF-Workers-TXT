@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 zczy-k
+
 // ============= Cloudflare 网盘 / 文本管理器（Workers + R2 + KV） =============
 // 管理员入口： https://<域名>/<ADMIN_UUID>
 // 访客只读 ： https://<域名>/s/<分享口令>

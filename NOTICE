@@ -1,0 +1,12 @@
+CF-Workers-TXT
+Copyright 2026 zczy-k
+
+本产品包含由第三方开发的软件：
+
+  * client/ 基于 Flutter（https://flutter.dev）构建，Copyright 2014 The
+    Flutter Authors，BSD-3-Clause 许可。
+  * client/ 依赖的 Dart 包及其版本见 client/app/pubspec.lock 与
+    client/core/pubspec.lock；每个包各自的 LICENSE 随包分发。
+
+worker.js 的全部服务端逻辑（存储布局、分享影子树、全文索引、编码识别、
+渲染分流、CSP 与沙箱策略）为本仓库原创，按 Apache License 2.0 授权。
