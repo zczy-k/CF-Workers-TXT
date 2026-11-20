@@ -44,7 +44,7 @@ class BrowserPage extends StatefulWidget {
   State<BrowserPage> createState() => _BrowserPageState();
 }
 
-class _BrowserPageState extends State<BrowserPage> {
+class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   InAppWebViewController? _controller;
   double _progress = 0;
   bool _loading = false;
@@ -84,6 +84,8 @@ class _BrowserPageState extends State<BrowserPage> {
   @override
   void initState() {
     super.initState();
+    // 回前台要重新把 Flutter 的输入焦点让出去（详见 _releaseFlutterFocus）。
+    WidgetsBinding.instance.addObserver(this);
     if (Platform.isAndroid || Platform.isIOS) {
       _refreshController = PullToRefreshController(
         // 松手即刷新当前页；转圈的收口在 onLoadStop / onReceivedError 里做，
@@ -96,9 +98,43 @@ class _BrowserPageState extends State<BrowserPage> {
       _url = site.startUrl;
       _title = site.displayName;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) widget.state.openSite(site);
+        if (!mounted) return;
+        // 页面转场刚结束：路由动画会顺手拿一次焦点，这里立刻交还给平台视图，
+        // 否则用户落下来的第一下点击就变成"交接动作"，被吃掉。
+        _releaseFlutterFocus();
+        widget.state.openSite(site);
       });
     }
+  }
+
+  /// 回前台 / 首帧落地时，把 Flutter 侧手里的输入焦点和 IME 连接先交出去。
+  ///
+  /// 为什么需要这一步（三端同一个病根）：
+  ///   * 平台视图（WebView2 / Android WebView / iOS WKWebView）被按下时，第一件事不是
+  ///     "处理这一下"，而是去原生那边要焦点、建立自己的 IME 连接。焦点交接是跨平台的
+  ///     异步动作（Windows 走 `SendMouseInput` 之前要先 SetFocus，Android 走
+  ///     `InputAwareWebView` 建 InputConnection，iOS 走 WKWebView 的 becomeFirstResponder）。
+  ///   * 如果这一刻 Flutter 还攥着一个输入连接（路由 push 动画、上一个页面的输入框、
+  ///     回前台后框架自己恢复的焦点），这一次按下就整个花在"交接"上：网页里的
+  ///     `<input>` 收不到这枚 down/up，光标不出，用户必须再点一次 —— 也就是
+  ///     "第一下没反应、第二下才好"。
+  ///   * 所以这里在"进页面首帧 / 视图创建 / 每次加载完 / 回前台"四个时机把焦点让干净，
+  ///     让平台视图第一次按下就能一步到位拿到焦点。
+  ///
+  /// 只清 Flutter 侧的 focus，不动任何 WebView 内部的焦点状态 —— 网页里已经在编辑的
+  /// 输入框不受影响（那是 DOM 焦点，和 Flutter 的 FocusNode 完全两套东西）。
+  void _releaseFlutterFocus() {
+    final FocusNode? node = FocusManager.instance.primaryFocus;
+    if (node == null) return;
+    // 已经没有焦点可让了，别白调一次（unfocus 会触发一次 focus traversal 通知）。
+    if (!node.hasFocus) return;
+    node.unfocus(disposition: UnfocusDisposition.scope);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 从后台回来：系统可能把 IME 连接留给了上一次的输入框，重新让一次焦点。
+    if (state == AppLifecycleState.resumed) _releaseFlutterFocus();
   }
 
   @override
@@ -210,6 +246,8 @@ class _BrowserPageState extends State<BrowserPage> {
                     if (mounted) setState(() => _loading = false);
                     await _syncNavigation(controller);
                     _refreshController?.endRefreshing();
+                    // 页面就绪：焦点让干净，用户接下来点第一个输入框就能直接出光标。
+                    _releaseFlutterFocus();
                   },
                   onProgressChanged: (InAppWebViewController controller, int progress) {
                     if (!mounted) return;
@@ -589,6 +627,7 @@ class _BrowserPageState extends State<BrowserPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // 关了"保持登录"：离开浏览页就把这个站点的登录态擦掉（无痕语义）。
     // Cookie 在这里清；WebView 侧已用 incognito，让新会话天然干净。
     if (!widget.state.config.saveLogin) {
@@ -626,6 +665,8 @@ class _BrowserPageState extends State<BrowserPage> {
   Future<void> _onWebViewCreated(InAppWebViewController controller) async {
     _controller = controller;
     widget.state.activeController = controller;
+    // 视图刚挂上：Flutter 侧若还攥着输入连接，平台视图第一次按下会白费。
+    _releaseFlutterFocus();
 
     // 记下引擎的真实 UA：下载时要用它，否则很多站点会回 403
     try {
