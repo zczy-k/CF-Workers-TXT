@@ -56,7 +56,7 @@ class _SettingsPageState extends State<SettingsPage> {
       appBar: AppBar(title: const Text('设置')),
       body: Centered(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
           children: <Widget>[
             _section(context, '下载'),
             _card(context, <Widget>[
@@ -213,14 +213,18 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 分组小标题：中性灰、小一号、字距放开一点。
+  /// 原来是"主色 + 加粗"，一屏四组就是四块彩色标签，像 2016 年的后台系统；
+  /// 现在所有分组都是安静的一行说明，重量交给下面的卡片。
   Widget _section(BuildContext context, String title) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 20, 8, 8),
+      padding: const EdgeInsets.fromLTRB(4, 22, 4, 8),
       child: Text(
         title,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.w700,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.4,
             ),
       ),
     );

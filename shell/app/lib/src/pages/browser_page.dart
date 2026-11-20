@@ -13,6 +13,7 @@ import 'package:window_manager/window_manager.dart';
 import '../engine/scripts.dart';
 import '../open.dart';
 import '../state.dart';
+import '../theme.dart';
 import 'downloads_page.dart';
 import 'settings_page.dart';
 import 'site_edit_page.dart';
@@ -267,18 +268,29 @@ class _BrowserPageState extends State<BrowserPage> {
 
   Widget _errorBar(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
-    return Material(
-      color: colors.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+    // 不再是一条通栏色块：改成浮在网页上方的圆角条（仍然占布局高度，
+    // 只是左右留白 + 圆角，视觉上和底栏的胶囊是同一套语言）。
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.errorContainer,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: colors.error.withValues(alpha: 0.18)),
+        ),
+        padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
         child: Row(
           children: <Widget>[
             Icon(Icons.wifi_off_outlined, size: 18, color: colors.onErrorContainer),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
                 _error!,
-                style: TextStyle(color: colors.onErrorContainer, fontSize: 13),
+                style: TextStyle(
+                  color: colors.onErrorContainer,
+                  fontSize: 13,
+                  height: 1.4,
+                ),
               ),
             ),
             TextButton(
@@ -294,7 +306,7 @@ class _BrowserPageState extends State<BrowserPage> {
     );
   }
 
-  /// 底栏：壳唯一的一条常驻工具条。
+  /// 底栏：壳唯一的一条常驻工具条（一颗浮起来的胶囊 dock）。
   ///
   /// 为什么所有按钮都塞在这里、而不是在网页上方叠一层悬浮工具条：
   /// 叠加层（悬浮胶囊）再怎么调位置，网页自己的右上角按钮、右侧滚动条、
@@ -305,91 +317,84 @@ class _BrowserPageState extends State<BrowserPage> {
   /// 底栏是 Column 的一个兄弟节点，它占多高网页就矮多少，两者永不重叠，
   /// 也就永远不会有"挡着别人按钮"这种事。代价只是底部固定几十 dp，
   /// 换来的是零概率的遮挡 —— 这个交换对笔记类站点明显划算。
+  ///
+  /// 布局（2026-11-20 改版）：
+  ///
+  ///        [▦]              [‹] [⌂] [›]              [⋯]
+  ///      站点列表                 导航组                  更多
+  ///
+  /// ① 视觉重量 1-3-1：左右各一个键、中间三个导航键，中线两边完全对称。
+  ///    站点列表原来贴在导航组右边，"右重左空"看着是歪的；挪到最左以后
+  ///    整条底栏的重心回到屏幕中线上。
+  /// ② 导航组仍然整组居中、首页正压屏幕中线（拇指从左右任一侧伸过来位移
+  ///    一样）；320dp 窄屏上左键占 4~48、导航组占 83~215、右键占 250~294，
+  ///    互不重叠。
+  /// ③ 形态从"贴底横条"改成"浮起的胶囊"：外层 10dp 边距 + 全圆角 +
+  ///    1px 描边 + 极淡投影。这样它和网页之间有一圈页面底色，不再像一条
+  ///    焊死在屏幕底边的灰条 —— 但它在 Column 里照样占位，不压网页。
   Widget _bottomBar(BuildContext context) {
     // 「站点列表」只在真有列表页的时候出现。
     // singleSiteMode = 白标包 + 预置恰好一个站点 + 禁止加站 —— 此时
     // BrowserPage 本身就是根路由（见 app.dart 的 _homeFor），背后没有列表页，
     // 按钮按下去只会是死键。用户的要求也是"单网站不要显示"。
     final bool showSiteList = !widget.state.branding.singleSiteMode;
-
-    // 底栏布局（2026-11-19 改版）：
-    //
-    //        [后退] [首页] [前进]              [站点列表] [更多]
-    //                ↑ 屏幕正中
-    //
-    // ① 导航组整组居中、首页正压在屏幕中线上，前后对称 —— 拇指从左右任一侧
-    //    伸过来位移一样，不用先"找"按钮在哪。
-    // ② 功能组贴右。Align 不带 widthFactor 时铺满 Stack，与居中的导航组天然
-    //    分层；320dp 窄屏上导航组 3×44=132 占 94~226，功能组 2×44=88 占
-    //    232~320，中间还剩 6dp，不会撞。
-    // ③ 底栏从 7 个键砍到 5 个：下载列表挪进「更多」菜单（那里本来就有一份
-    //    刷新，底栏的刷新键同理删掉，同一功能不留两个入口）。
-    // 触摸端 56dp、桌面 48dp：鼠标是精确指针，48 已经够点；手指需要更多余量。
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    final Color line = AppTheme.hairline(colors);
     // 键间距只在桌面端加（窗口宽，留白好看）；触摸端 44dp 命中区里图标本身
     // 就有内边距，再加间距会把窄屏挤爆，反而更挤。
-    final double navGap = _isTouch ? 0 : 8;
+    final double navGap = _isTouch ? 0 : 10;
+    // 触摸端 52（手指要更多余量）、桌面 44（鼠标是精确指针）。
+    final double dockHeight = _isTouch ? 52 : 44;
+    final double iconSize = _isTouch ? 23 : 21;
 
     return SafeArea(
       top: false,
-      child: BottomAppBar(
-        height: _isTouch ? 56 : 48,
-        padding: EdgeInsets.zero,
-        child: Stack(
-          // 居中：底栏 56 / 48 比按钮的 48 命中区高时，让那一排按键垂直居中，
-          // 而不是顶着上沿留一条空档。Positioned 的进度线不受影响。
-          alignment: Alignment.center,
-          children: <Widget>[
-            // 导航组：后退 / 首页 / 前进，整组居中。
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                _barIcon(
-                  tooltip: '后退',
-                  icon: Icons.arrow_back,
-                  onPressed: _canGoBack ? () => _controller?.goBack() : null,
-                ),
-                if (navGap > 0) SizedBox(width: navGap),
-                _barIcon(
-                  tooltip: '回到首页',
-                  icon: Icons.home_outlined,
-                  onPressed: () {
-                    final SiteProfile? site = _site;
-                    if (site != null) {
-                      _controller?.loadUrl(
-                        urlRequest: URLRequest(url: WebUri(site.startUrl)),
-                      );
-                    }
-                  },
-                ),
-                if (navGap > 0) SizedBox(width: navGap),
-                _barIcon(
-                  tooltip: '前进',
-                  icon: Icons.arrow_forward,
-                  onPressed: _canForward ? () => _controller?.goForward() : null,
-                ),
-              ],
-            ),
-            // 功能组贴右：站点列表 / 更多。
-            Align(
-              alignment: Alignment.centerRight,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  // 站点列表（退出当前站点）。
-                  //
-                  // **必须用 pop()，绝不能用 maybePop()。** 本页外面套着
-                  // PopScope(canPop: !_canGoBack)（见本文件 _build 的返回键
-                  // 拦截）。maybePop 会先问路由的 popDisposition，只要网页还有
-                  // 历史（_canGoBack == true）这次 pop 就被判成 doNotPop，转而
-                  // 执行 onPopInvokedWithResult 里的 _controller.goBack() ——
-                  // 于是这个键实际等于"后退一页"，用户点完还停在同一个站点里。
-                  // 桌面端 WebView 历史几乎总是非空 → 100% 退化；手机端只有历史
-                  // 退到底那一下才碰巧能退出，这就是"时灵时不灵"的全部来源。
-                  // pop() 是硬退栈，不查 popDisposition，语义才是"退出站点"。
-                  if (showSiteList)
-                    _barIcon(
+      child: Padding(
+        // 胶囊四周留白：这圈留白就是"浮起来"的全部来源（不用阴影堆）。
+        // 底边 6 + 高度 52 = 64，比原来的 56 只多 8dp，换一整条现代观感。
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+        child: Container(
+          height: dockHeight,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: line),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: _isTouch ? 0.05 : 0.07),
+                blurRadius: 14,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Stack(
+            // 居中：dock 比按钮的命中区高时，让那排按键垂直居中，
+            // 而不是顶着上沿留一条空档。Positioned 的进度线不受影响。
+            alignment: Alignment.center,
+            children: <Widget>[
+              // 左：站点列表（退出当前站点 / 换一个站点）。
+              //
+              // **必须用 pop()，绝不能用 maybePop()。** 本页外面套着
+              // PopScope(canPop: !_canGoBack)（见本文件 _build 的返回键拦截）。
+              // maybePop 会先问路由的 popDisposition，只要网页还有历史
+              // （_canGoBack == true）这次 pop 就被判成 doNotPop，转而执行
+              // onPopInvokedWithResult 里的 _controller.goBack() —— 于是这个键
+              // 实际等于"后退一页"，用户点完还停在同一个站点里。
+              // 桌面端 WebView 历史几乎总是非空 → 100% 退化；手机端只有历史
+              // 退到底那一下才碰巧能退出，这就是"时灵时不灵"的全部来源。
+              // pop() 是硬退栈，不查 popDisposition，语义才是"退出站点"。
+              //
+              // 位置从"导航组右边"挪到最左：右侧原本挤着站点列表 + 更多两个键，
+              // 左边空空，整条底栏看着是歪的；1-3-1 之后重心才回到中线。
+              if (showSiteList)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: _barIcon(
                       tooltip: '站点列表',
-                      icon: Icons.apps,
+                      iconWidget: Icon(Icons.grid_view_rounded, size: iconSize),
                       onPressed: () {
                         final NavigatorState nav = Navigator.of(context);
                         // canPop 兜底：单站点/根路由场景下按钮本来就不显示，
@@ -397,30 +402,71 @@ class _BrowserPageState extends State<BrowserPage> {
                         if (nav.canPop()) nav.pop();
                       },
                     ),
+                  ),
+                ),
+              // 中：后退 / 首页 / 前进，整组居中，首页正压屏幕中线。
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
                   _barIcon(
-                    tooltip: '更多',
-                    icon: Icons.more_vert,
-                    onPressed: () => _showPageMenu(context),
+                    tooltip: '后退',
+                    icon: Icons.chevron_left_rounded,
+                    iconSize: iconSize + 2,
+                    onPressed: _canGoBack ? () => _controller?.goBack() : null,
+                  ),
+                  if (navGap > 0) SizedBox(width: navGap),
+                  _barIcon(
+                    tooltip: '回到首页',
+                    icon: Icons.home_outlined,
+                    iconSize: iconSize,
+                    onPressed: () {
+                      final SiteProfile? site = _site;
+                      if (site != null) {
+                        _controller?.loadUrl(
+                          urlRequest: URLRequest(url: WebUri(site.startUrl)),
+                        );
+                      }
+                    },
+                  ),
+                  if (navGap > 0) SizedBox(width: navGap),
+                  _barIcon(
+                    tooltip: '前进',
+                    icon: Icons.chevron_right_rounded,
+                    iconSize: iconSize + 2,
+                    onPressed: _canForward ? () => _controller?.goForward() : null,
                   ),
                 ],
               ),
-            ),
-            // 加载进度：压在底栏自己的上沿，横贯全宽。
-            // 放在底栏内部是因为它不占任何额外高度（Bar 的高度是定死的），
-            // 同时又绝不可能跑到网页上去盖住东西。
-            if (_loading)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: IgnorePointer(
-                  child: LinearProgressIndicator(
-                    value: _progress <= 0 || _progress >= 1 ? null : _progress,
-                    minHeight: 2,
+              // 右：更多。横三点比竖三点更符合"底栏右侧"的现代写法
+              // （竖三点是 AppBar 时代的位置暗示）。
+              Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: _barIcon(
+                    tooltip: '更多',
+                    iconWidget: Icon(Icons.more_horiz_rounded, size: iconSize + 1),
+                    onPressed: () => _showPageMenu(context),
                   ),
                 ),
               ),
-          ],
+              // 加载进度：压在胶囊自己的上沿，横贯全宽。
+              // 放在 dock 内部是因为它不占任何额外高度（高度是定死的），
+              // 同时又绝不可能跑到网页上去盖住东西。
+              if (_loading)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: IgnorePointer(
+                    child: LinearProgressIndicator(
+                      value: _progress <= 0 || _progress >= 1 ? null : _progress,
+                      minHeight: 2,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -429,22 +475,24 @@ class _BrowserPageState extends State<BrowserPage> {
   /// 底栏上的一个图标按钮。
   ///
   /// 命中区从 IconButton 默认的 48dp 收到 44（触摸端）/ 40（桌面），不是随手
-  /// 缩的：底栏最挤的时候（多站点模式）有 7 个按钮，7×48 = 336 —— 360dp 的
-  /// 窄屏刚好卡死，320dp（iPhone SE 一类老机型）直接 RenderFlex overflow 报
-  /// 红条。44 仍在 Material 触摸尺寸下限附近，手指点得中；7×44 = 308 留出余量。
-  /// 现在底栏只剩 5 个键（下载、刷新都收进「更多」菜单），这套尺寸没动 ——
-  /// 44/40 的命中区手感是验证过的，换布局不跟着改手感。
+  /// 缩的：320dp（iPhone SE 一类老机型）上 dock 内宽只有 298，左右各一个键
+  /// + 中间三个导航键已经吃掉 298 里的 44+44+132；命中区再大就会撞。44 仍在
+  /// Material 触摸尺寸下限附近，手指点得中。
+  /// 图标尺寸单独走 iconSize（chevron 这类字形天生比实心图标窄，要放大两号
+  /// 才和 home / grid 的视觉重量对齐）。
   Widget _barIcon({
     required String tooltip,
     required VoidCallback? onPressed,
     IconData? icon,
     Widget? iconWidget,
+    double? iconSize,
   }) {
     final double size = _isTouch ? 44 : 40;
     return IconButton(
       tooltip: tooltip,
       onPressed: onPressed,
-      icon: iconWidget ?? Icon(icon),
+      icon: iconWidget ?? Icon(icon, size: iconSize),
+      iconSize: iconSize,
       padding: EdgeInsets.zero,
       constraints: BoxConstraints.tightFor(width: size, height: size),
     );

@@ -43,7 +43,7 @@ class DownloadsPage extends StatelessWidget {
             child: tasks.isEmpty
                 ? _Empty(dir: dir)
                 : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
                     itemCount: tasks.length,
                     itemBuilder: (BuildContext context, int index) =>
                         _TaskCard(state: state, task: tasks[index]),
@@ -106,24 +106,23 @@ class _Empty extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Container(
-              width: 96,
-              height: 96,
+              width: 76,
+              height: 76,
               decoration: BoxDecoration(
-                color: colors.primary.withValues(alpha: 0.10),
-                shape: BoxShape.circle,
+                color: colors.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: colors.primary.withValues(alpha: 0.12)),
               ),
               child: Icon(
-                Icons.download_outlined,
-                size: 44,
+                Icons.download_rounded,
+                size: 34,
                 color: colors.primary,
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 22),
             Text(
               '还没有下载',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
             Text(

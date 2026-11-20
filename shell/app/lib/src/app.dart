@@ -4,7 +4,6 @@ import 'state.dart';
 import 'theme.dart';
 import 'pages/browser_page.dart';
 import 'pages/home_page.dart';
-import 'startup_update_check.dart';
 
 /// MaterialApp 的 navigator key —— 供启动后的静默更新检查拿根 context 弹窗
 /// （见 `startup_update_check.dart`）。设置页的手动检查不需要它，那里有现成

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:webshell_core/webshell_core.dart';
 
 import '../state.dart';
+import '../theme.dart';
 import '../widgets/centered.dart';
 import '../widgets/site_avatar.dart';
 import 'browser_page.dart';
@@ -21,8 +22,11 @@ class HomePage extends StatelessWidget {
     final Branding branding = state.branding;
 
     return Scaffold(
+      // 大标题放在 body 里，AppBar 只留右侧两个动作。
+      // 小字标题（17）和大字标题（30）上下堆一起是"没设计过"最典型的痕迹；
+      // iOS / Linear / 微信新版的分层都是**只留一个标题层级**，其余交给留白。
       appBar: AppBar(
-        title: Text(branding.appName),
+        toolbarHeight: 48,
         actions: <Widget>[
           IconButton(
             tooltip: '下载',
@@ -38,17 +42,18 @@ class HomePage extends StatelessWidget {
             onPressed: () => _push(context, SettingsPage(state: state)),
             icon: const Icon(Icons.settings_outlined),
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Centered(
         child: config.sites.isEmpty
             ? _EmptySites(branding: branding, onAdd: () => _addSite(context))
-            : _SiteList(state: state, onAdd: () => _addSite(context)),
+            : _SiteList(state: state, title: branding.appName),
       ),
       floatingActionButton: branding.allowAddSite && config.sites.isNotEmpty
           ? FloatingActionButton.extended(
               onPressed: () => _addSite(context),
-              icon: const Icon(Icons.add),
+              icon: const Icon(Icons.add_rounded),
               label: const Text('添加站点'),
             )
           : null,
@@ -91,24 +96,23 @@ class _EmptySites extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Container(
-              width: 96,
-              height: 96,
+              width: 76,
+              height: 76,
               decoration: BoxDecoration(
-                color: colors.primary.withValues(alpha: 0.10),
-                shape: BoxShape.circle,
+                color: colors.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: colors.primary.withValues(alpha: 0.12)),
               ),
               child: Icon(
-                Icons.language_outlined,
-                size: 44,
+                Icons.language_rounded,
+                size: 34,
                 color: colors.primary,
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 22),
             Text(
               '还没有站点',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
             Text(
@@ -162,32 +166,54 @@ class _EmptySites extends StatelessWidget {
 }
 
 class _SiteList extends StatelessWidget {
-  const _SiteList({required this.state, required this.onAdd});
+  const _SiteList({required this.state, required this.title});
 
   final ShellState state;
-  final VoidCallback onAdd;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
     final List<SiteProfile> sites = state.config.sites;
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    final TextTheme text = Theme.of(context).textTheme;
+
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-      itemCount: sites.length + 1,
+      padding: const EdgeInsets.fromLTRB(20, 2, 20, 110),
+      // 0 是大标题头部，最后一条是底部提示，中间才是站点卡片。
+      itemCount: sites.length + 2,
       itemBuilder: (BuildContext context, int index) {
-        if (index == sites.length) {
+        if (index == 0) {
           return Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              '长按站点可以编辑名称、请求头、Basic Auth，或者清掉登录态。',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+            padding: const EdgeInsets.fromLTRB(2, 2, 2, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.headlineMedium,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${sites.length} 个站点',
+                  style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+                ),
+              ],
             ),
           );
         }
-        final SiteProfile site = sites[index];
-        return _SiteCard(state: state, site: site);
+        if (index == sites.length + 1) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Text(
+              '长按站点可以编辑名称、请求头、Basic Auth，或者清掉登录态。',
+              textAlign: TextAlign.center,
+              style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+            ),
+          );
+        }
+        return _SiteCard(state: state, site: sites[index - 1]);
       },
     );
   }
@@ -203,55 +229,91 @@ class _SiteCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool isCurrent = state.config.activeSiteId == site.id;
     final ColorScheme colors = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        leading: SiteAvatar(site: site, size: 46),
-        title: Row(
-          children: <Widget>[
-            Flexible(
-              child: Text(
-                site.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
+    final TextTheme text = Theme.of(context).textTheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            state.openSite(site);
+            Navigator.of(context).push<void>(BrowserPage.route(state, site.id));
+          },
+          onLongPress: () => _siteMenu(context),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+              border: Border.all(color: AppTheme.hairline(colors)),
             ),
-            if (isCurrent) ...<Widget>[
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: colors.primary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  '默认',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: colors.primary,
+            padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+            child: Row(
+              children: <Widget>[
+                SiteAvatar(site: site, size: 44),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Flexible(
+                            child: Text(
+                              site.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: text.titleMedium?.copyWith(fontSize: 15),
+                            ),
+                          ),
+                          if (isCurrent) ...<Widget>[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colors.primary.withValues(alpha: 0.10),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                '默认',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.2,
+                                  color: colors.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        displayUrl(site.startUrl),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.bodySmall?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            ],
-          ],
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: Text(
-            displayUrl(site.startUrl),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: 20,
+                  color: colors.outlineVariant,
+                ),
+              ],
+            ),
           ),
         ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () {
-          state.openSite(site);
-          Navigator.of(context).push<void>(BrowserPage.route(state, site.id));
-        },
-        onLongPress: () => _siteMenu(context),
       ),
     );
   }

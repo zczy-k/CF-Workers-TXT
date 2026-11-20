@@ -83,7 +83,7 @@ class _SiteEditPageState extends State<SiteEditPage> {
       ),
       body: Centered(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
           children: <Widget>[
             _section(context, '基本信息'),
             _card(<Widget>[
@@ -283,14 +283,16 @@ class _SiteEditPageState extends State<SiteEditPage> {
     );
   }
 
+  /// 分组小标题：跟设置页同一套（中性灰小字，不用主色）。
   Widget _section(BuildContext context, String title) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 20, 8, 8),
+      padding: const EdgeInsets.fromLTRB(4, 22, 4, 8),
       child: Text(
         title,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.w700,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.4,
             ),
       ),
     );
