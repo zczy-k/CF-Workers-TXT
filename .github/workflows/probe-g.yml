@@ -1,0 +1,17 @@
+name: probe-g
+
+# 只用一个第三方 action，排除"官方 action 被拦"。
+on:
+  push:
+    paths:
+      - '.github/workflows/probe-g.yml'
+
+jobs:
+  ping:
+    name: ping
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart --version

@@ -1,0 +1,16 @@
+name: probe-f
+
+# 换成另一个官方 action：如果它也挂，说明"任何 uses: 都解析不了"。
+on:
+  push:
+    paths:
+      - '.github/workflows/probe-f.yml'
+
+jobs:
+  ping:
+    name: ping
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: core.info('hi')
