@@ -61,10 +61,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 必须是 21，不能是 17。
+      # AGP 9.x 的 lint 里 `CommentDetector` 调了 `List.removeLast()` —— 那是 Java 21
+      # 才加到 List 接口上的方法（SequencedCollection）。用 JDK 17 跑，
+      # `:插件:lintVitalAnalyzeRelease` 会以 NoSuchMethodError 崩掉，
+      # 报错长这样（极具误导性，看着像代码问题）：
+      #   Unexpected failure during lint analysis of UrlLauncher.java
+      #   (this is a bug in lint or one of the libraries it depends on)
+      #   Message: 'java.lang.Object java.util.List.removeLast()'
+      # 那是插件模块自己的 lintVital 任务，改不了它的 lint 配置，只能保证运行时版本对得上。
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - uses: subosito/flutter-action@v2
         with:
