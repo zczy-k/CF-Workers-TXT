@@ -169,6 +169,30 @@ jobs:
           PY
           head -20 "$SETTINGS"
 
+      # 第二道兜底：buildscript 仓库不受 repositoriesMode 管控，给所有 project
+      # 的 buildscript 补 Maven Central / Google / 阿里云镜像。只碰 buildscript，
+      # 绝不碰 p.repositories（Flutter 的 included build 是 FAIL_ON_PROJECT_REPOS）。
+      - name: 给 Gradle buildscript 补多仓库兜底（init script）
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          cat > "$HOME/.gradle/init.d/00-mirrors.gradle" <<'GRADLE'
+          def mirrors = [
+              'https://maven.aliyun.com/repository/public',
+              'https://maven.aliyun.com/repository/google',
+              'https://maven.aliyun.com/repository/gradle-plugin',
+          ]
+
+          allprojects { p ->
+              p.buildscript.repositories {
+                  google()
+                  mavenCentral()
+                  mirrors.each { u -> maven { url = u } }
+                  gradlePluginPortal()
+              }
+          }
+          GRADLE
+          echo "已写入 $HOME/.gradle/init.d/00-mirrors.gradle"
+
       - name: pub get
         working-directory: client/app
         run: flutter pub get
@@ -184,9 +208,30 @@ jobs:
       # KEYSTORE_BASE64 / KEY_ALIAS / KEY_PASSWORD / STORE_PASSWORD，再在此处解码并在
       # android/app/build.gradle(.kts) 里接上 signingConfig —— 但那属于"分发"环节，
       # 不该成为"能不能编译通过"的前提。
+      # 网络抖动（镜像 429/502 返回 HTML 而不给 POM、portal 偶发不可达）是这类失败
+      # 最常见的推手。报错可能是 "Gradle threw an error while downloading artifacts"，
+      # 也可能是 "Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.5.7'] was not
+      # found" —— 看着像版本不存在，其实那些 POM 本地 curl 全是 200，纯粹下载不到。
+      # 给它 3 次机会，每次先清掉可能被写坏的 kotlin 依赖缓存块（半截 .pom 会一直
+      # "存在但坏"）。
       - name: 构建 release APK
         working-directory: client/app
-        run: flutter build apk --release
+        run: |
+          set -o pipefail
+          for attempt in 1 2 3; do
+            echo "===== 第 $attempt 次 flutter build apk ====="
+            if flutter build apk --release; then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then break; fi
+            echo "第 $attempt 次失败，清 Kotlin 依赖缓存后重试（10s）"
+            rm -rf "$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin" \
+                   "$HOME/.gradle/caches/modules-2/files-2.1/org.gradle.kotlin" \
+                   "$HOME/.gradle/caches/modules-2/metadata-2."* 2>/dev/null || true
+            sleep 10
+          done
+          echo '::error title=APK 构建失败::三次都失败，看上面日志里第一个 "What went wrong" 段'
+          exit 1
 
       - name: 重命名产物
         working-directory: client/app
