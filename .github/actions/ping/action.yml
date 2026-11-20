@@ -1,8 +1,0 @@
-name: ping-local
-description: 本地复合 action，不需要联网拉取
-runs:
-  using: composite
-  steps:
-    - name: echo
-      shell: bash
-      run: echo "local action ok"
