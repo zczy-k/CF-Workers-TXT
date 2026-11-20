@@ -294,13 +294,13 @@ ensureSession():
 | Job | Runner | 产物 | 说明 |
 | --- | --- | --- | --- |
 | `test-core` | ubuntu-latest | — | `dart test` 跑 core 的纯单测（不需要模拟器，秒级） |
-| `android` | ubuntu-latest | `cfwtxt-android.apk` | **自签 release APK**，直接侧载安装；也可出 AAB 上架 |
-| `windows` | windows-latest | `cfwtxt-windows.zip` | 便携版（解压即用），免签名 |
+| `android` | ubuntu-latest | `cfwtxt-android-apk`（里面是 `cfwtxt-<构建号>.apk`） | release APK，直接侧载安装 |
+| `windows` | windows-latest | `cfwtxt-windows-x64`（zip 里是完整目录） | 便携版（解压即用），免签名 |
 
 四个实践要点：
 
 1. **`test-core` 必须独立且先跑**。core 是纯 Dart，`dart test` 几秒钟出结果，能在编译 Flutter 之前就把 URL 解析 / 认证 / API 封装的逻辑错误挡掉 —— 而 Flutter 编译（尤其 Windows）要几分钟，别浪费那个时间。
-2. **Android 签名**：release APK 必须签名，否则装不上。在仓库 Secrets 里放 `KEYSTORE_BASE64` / `KEY_ALIAS` / `KEY_PASSWORD` / `STORE_PASSWORD` 四个值，CI 里 `base64 -d` 还原 keystore 再 `flutter build apk --release`。**没配 Secrets 时退化为 Debug 构筑**（照样能装，只是体积大一点）—— 这样仓库刚建好、Secrets 还没填的时候 Action 也不会红。
+2. **Android 签名**：Flutter 模板的 release 默认用 **debug keystore** 签名 —— 所以一个 Secrets 都不配，也能产出一个可侧载安装的 APK；代价是不能上架应用商店，而且和别处打的同包名包会互相覆盖安装失败。要正式签名得自己接：Secrets 里放 `KEYSTORE_BASE64` / `KEY_ALIAS` / `KEY_PASSWORD` / `STORE_PASSWORD`，CI 里 `base64 -d` 还原 keystore，再到 `android/app/build.gradle(.kts)` 里接上 `signingConfig`。**这段流水线里目前没有现成实现**（`client-build.yml` 的注释里写了怎么加）—— 属于"分发"环节，刻意不让它成为"能不能编译通过"的前提。
 3. **Windows 上要先开桌面支持**：`flutter config --enable-windows-desktop`。产物在 `build/windows/x64/runner/Release/`，把整个目录压成 zip 才是可用的便携版（**只拷 exe 会缺 `flutter_windows.dll` 和 `data/`**，这是新手最常踩的坑）。
 4. **两个平台都不需要 Mac、不需要代码签名证书**，所以整套流水线完全可以白嫖 GitHub 免费额度跑通。
 
@@ -319,7 +319,9 @@ ensureSession():
 
 ---
 
-## 10. 落地顺序建议
+## 10. 落地顺序（已全部完成）
+
+下面是当初排的顺序 —— 五步现在都跑完了，留着是为了说明**为什么是这个顺序**（先让纯逻辑可测，再谈界面）：
 
 1. **core + 单测**（本文档已给出实现）：`dart test` 在 CI 里跑通 —— 认证、URL 解析、API 封装、限流退避
 2. **Flutter 壳**：首启向导（站点地址）→ 目录浏览 → 编辑器（自动保存 + 发布）
