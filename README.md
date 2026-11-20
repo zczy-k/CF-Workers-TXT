@@ -1,25 +1,27 @@
 # CF-Workers-TXT
 
-**你的 Cloudflare 网盘 + 两个壳。** 服务端一个 `worker.js` 跑在 Workers/Pages 上，文件本体进 R2，
-分享口令进 KV —— 不用服务器、不用数据库、不用备案。想装进手机/桌面，仓库里还有两种现成的客户端。
+**一个跑在 Cloudflare 上的在线笔记 / 网盘。** 一个 `worker.js` 跑在 Workers/Pages 上，文件本体进 R2，
+分享口令进 KV —— 不用服务器、不用数据库、不用备案。仓库里还带一个原生客户端，装到手机/桌面上就不用开浏览器了。
 
 ```
 worker.js  ──►  Cloudflare Workers / Pages  ──►  R2（文件） + KV（分享口令 / 登录态）
-    ▲                                    ▲
-    │ /<ADMIN_UUID>/api                  │ 网页（浏览器直接开）
-    │                                    │
-client/（原生客户端）              shell/（万能壳）
-自己画像素，不套 WebView           套系统 WebView，装任意网站
+    ▲
+    │ /<ADMIN_UUID>/api
+    │
+client/（原生客户端）
+自己画像素，不套 WebView
 ```
 
 | 你想要的 | 用这个 | 说明 |
 | --- | --- | --- |
-| 一个自己的在线网盘（浏览器就能用） | **`worker.js`** | 主力形态，功能最全，见本文 |
+| 一个自己的在线笔记 / 网盘（浏览器就能用） | **`worker.js`** | 主力形态，功能最全，见本文 |
 | 手机上像 App 一样打开、不依赖浏览器 | **`client/`** | Flutter 原生渲染，不碰浏览器；只吃 `worker.js` 现有接口，服务端不用改。见 [`client/README.md`](./client/README.md) |
-| 把**任意网站**（OA、网盘、论坛）包成自己的 App | **`shell/`** | 白标壳：名字/图标/主题色可换，下载落到本机。见 [`shell/README.md`](./shell/README.md) |
 
-> 三者的取舍与踩过的坑（能力矩阵、平台限制、为什么这么选）写在
-> [`client/ARCHITECTURE.md`](./client/ARCHITECTURE.md) 与 [`shell/ARCHITECTURE.md`](./shell/ARCHITECTURE.md)。
+> **想把某个网站包成自己的 App？** 那不归这个仓库管，去隔壁
+> [`zczy-k/CF-WebShell`](https://github.com/zczy-k/CF-WebShell) —— 一个通用的 Android / Windows 网页壳，
+> 名字、图标、站点都可配，跟本项目**没有任何代码依赖**。
+>
+> 本项目的客户端取舍与踩过的坑写在 [`client/ARCHITECTURE.md`](./client/ARCHITECTURE.md)。
 > 本文只讲**服务端怎么部、怎么用**。
 
 ---
@@ -278,27 +280,16 @@ KV 里存的（前缀互不干扰）：
 ```
 worker.js                 Cloudflare Worker 主体（单文件，直接粘贴进控制台）
 pages.zip                 Pages 版产物（上传 assets 用）
+mock.mjs                  本地跑 worker.js 用的 R2 / KV 内存实现（node mock.mjs）
 client/                   Flutter 原生客户端（自己画像素，不吃 WebView）
   core/                   纯 Dart：API 封装 / URL 规则 / 同步引擎（dart test）
   app/                    界面
-shell/                    万能壳（把任意网站包成 App）
-  core/                   纯 Dart：站点档案 / 配置 / 下载队列（dart test）
-  app/                    界面（WebView 引擎 + 下载器）
-  branding/               白标素材
-  tools/patch_platform.py 构建期改清单 / 注入通知
 .github/workflows/
   client-build.yml        client/** 变化时出 cfwtxt-android-apk / cfwtxt-windows-x64
-  shell-build.yml         shell/** 变化时出 webshell-android-apk / webshell-windows-x64
 ```
 
-两个流水线都是「push 到 `main` 或对相应目录发 PR 就自动跑」，产物在那次运行的 **Artifacts** 里
-（GitHub 的产物和日志**需要登录**才能下）。`shell-build` 还能手动 **Run workflow** 填参数出白标包：
-App 名字、包名、预置站点、主题色、图标、是否允许用户再加站点 —— 参数表见
-[`shell/README.md`](./shell/README.md)。
-
-> `workflow_dispatch` 的 inputs **上限 10 个**，第 11 个会让整份 workflow 判成 `Invalid workflow file`，
-> 症状是每次触发都 `startup_failure`（0 个 job、0 条日志、页面上还不写原因）。所以更新检查源走
-> Settings → Variables → `UPDATE_URL`，别往 inputs 里塞。
+流水线是「push 到 `main` 或对 `client/**` 发 PR 就自动跑」，产物在那次运行的 **Artifacts** 里
+（GitHub 的产物和日志**需要登录**才能下）。想手动来一次：Actions → `client-build` → Run workflow。
 
 ---
 
@@ -307,5 +298,5 @@ App 名字、包名、预置站点、主题色、图标、是否允许用户再�
 这类「Workers + R2 网盘」的思路在很多开源项目里都出现过；本项目的差异点在于**渲染层按类型自动分流**、
 **草稿与分享物理隔离**、以及把**成本/上限全部实测后写进文档**。
 
-有问题先翻两个 `ARCHITECTURE.md` 里对应章节 —— 大部分「为什么这么设计」都写了原因，不是拍脑袋。
+有问题先翻 [`client/ARCHITECTURE.md`](./client/ARCHITECTURE.md) 里对应章节 —— 大部分「为什么这么设计」都写了原因，不是拍脑袋。
 用得顺手就给个 Star。
