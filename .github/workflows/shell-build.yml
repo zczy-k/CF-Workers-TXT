@@ -14,6 +14,12 @@ on:
       - 'shell/**'
       - '.github/workflows/shell-build.yml'
   workflow_dispatch:
+    # ★ 死规矩：workflow_dispatch 的 inputs **最多 10 个**，第 11 个会让整份 workflow
+    # 被判成 "Invalid workflow file"。症状极具欺骗性——每次触发都 startup_failure：
+    # run 列表里有记录，但 0 个 job、0 条日志、0 个 check-run，页面上还不写原因。
+    # 之前就是多塞了一个 update_url 变成 11 个，CI 整体哑了一个 commit。
+    # 所以这里锁死 10 个；「更新检查源」改走 Settings → Variables（名 UPDATE_URL）。
+    # 以后要加新参数，先合并掉一个旧的，别硬加。
     inputs:
       app_name:
         description: 'App 名字（安卓桌面图标名 / Windows 窗口标题）。留空 = WebShell'
@@ -57,10 +63,8 @@ on:
         required: false
         type: boolean
         default: true
-      update_url:
-        description: '更新检查源（一个 JSON：{"version":"1.2.0","url":"…","note":"…"}）。留空 = 关闭更新检查'
-        required: false
-        default: ''
+      # 第 11 个参数原本在这里（update_url）。为了不撞 10 个的上限，它已经挪到
+      # Settings → Variables → UPDATE_URL（值仍是那段 JSON）；secrets 里同名也认。
 
 concurrency:
   group: shell-build-${{ github.ref }}
@@ -120,7 +124,9 @@ jobs:
       LOGO_PATH: ${{ github.event.inputs.logo_path }}
       AUTO_ICON: ${{ github.event.inputs.auto_icon || 'true' }}
       ALLOW_ADD_SITE: ${{ github.event.inputs.allow_add_site || 'true' }}
-      UPDATE_URL: ${{ github.event.inputs.update_url }}
+      # 同上：为了守住 10 个 inputs 的上限，更新检查源不再走 inputs。
+      # 在 Settings → Variables 建 UPDATE_URL（值就是那段 JSON），或者在 Secrets 里配同名。
+      UPDATE_URL: ${{ vars.UPDATE_URL || secrets.UPDATE_URL }}
     steps:
       - uses: actions/checkout@v4
 
