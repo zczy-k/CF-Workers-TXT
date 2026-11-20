@@ -1,0 +1,18 @@
+name: probe-d
+
+# 与 ci-ping 内容等价（只改名/改路径）。如果它也 startup_failure，
+# 就证明跟 workflow 内容彻底无关，是仓库/平台侧的状态问题。
+on:
+  push:
+    paths:
+      - '.github/workflows/probe-d.yml'
+
+jobs:
+  ping:
+    name: ping
+    runs-on: ubuntu-latest
+    steps:
+      - name: 打个招呼
+        run: |
+          echo "ping ok"
+          echo "${{ github.sha }}"
